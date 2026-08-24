@@ -89,8 +89,42 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
   public async getChannel(input: GetChannelInput): Promise<Channel> {
     await this.ensureAuthenticated();
     const page = await this.webClient.getPage();
-    const channelPage = new MattermostChannelPage(page, this.baseUrl, this.logger);
 
+    // 1. Try in-browser API lookup
+    try {
+      const raw = await page.evaluate(
+        async ({ channelId, channelName, teamId }) => {
+          if (channelId) {
+            const res = await fetch(`/api/v4/channels/${channelId}`, { credentials: 'include' });
+            if (res.ok) return res.json();
+          }
+          if (channelName && teamId) {
+            const res = await fetch(`/api/v4/teams/${teamId}/channels/name/${channelName}`, {
+              credentials: 'include',
+            });
+            if (res.ok) return res.json();
+          }
+          return null;
+        },
+        { channelId: input.channelId, channelName: input.channelName, teamId: input.teamId }
+      );
+
+      if (raw && raw.id) {
+        return {
+          id: raw.id,
+          teamId: raw.team_id,
+          name: raw.name,
+          displayName: raw.display_name,
+          type: raw.type,
+          header: raw.header,
+          purpose: raw.purpose,
+        };
+      }
+    } catch {
+      // Fallback to UI navigation
+    }
+
+    const channelPage = new MattermostChannelPage(page, this.baseUrl, this.logger);
     const channelIdentifier = input.channelName || input.channelId || 'town-square';
     await channelPage.navigateToChannel(channelIdentifier, input.teamId || this.defaultTeamName);
     const title = await channelPage.getChannelTitle();
@@ -162,7 +196,6 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
       }, teamId);
 
       if (Array.isArray(apiChannels) && apiChannels.length > 0) {
-        // Filter out direct messages ('D') if desired or keep public/private/group
         const validChannels = apiChannels
           .filter((c) => c.type === 'O' || c.type === 'P' || c.type === 'G')
           .map((c) => ({
@@ -224,13 +257,56 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
   public async sendMessage(input: SendMessageInput): Promise<SendMessageResult> {
     const user = await this.ensureAuthenticated();
     const page = await this.webClient.getPage();
+
+    // 1. Primary Strategy: In-Browser API creation (Ultra-fast, accurate, returns real post ID)
+    try {
+      this.logger.debug(`Playwright: Posting message to channel '${input.channelId}' via session API...`);
+      const rawPost = await page.evaluate(
+        async ({ channelId, message, rootId }) => {
+          const res = await fetch('/api/v4/posts', {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Requested-With': 'XMLHttpRequest',
+            },
+            body: JSON.stringify({
+              channel_id: channelId,
+              message,
+              root_id: rootId || undefined,
+            }),
+          });
+          if (res.ok) {
+            return res.json();
+          }
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.message || `HTTP ${res.status}`);
+        },
+        { channelId: input.channelId, message: input.message, rootId: input.rootId }
+      );
+
+      if (rawPost && rawPost.id) {
+        return {
+          id: rawPost.id,
+          channelId: rawPost.channel_id,
+          userId: rawPost.user_id || user.id,
+          message: rawPost.message,
+          rootId: rawPost.root_id || undefined,
+          createdAt: new Date(rawPost.create_at || Date.now()),
+        };
+      }
+    } catch (err) {
+      this.logger.debug('In-browser API post failed, falling back to UI composer', { error: String(err) });
+    }
+
+    // 2. Fallback Strategy: UI Composer typing
     const channelPage = new MattermostChannelPage(page, this.baseUrl, this.logger);
     const composer = new MattermostComposer(page, this.logger);
 
-    this.logger.debug(`Playwright: Navigating to channel '${input.channelId}'...`);
+    this.logger.debug(`Playwright: Navigating to channel '${input.channelId}' via UI...`);
     await channelPage.navigateToChannel(input.channelId, this.defaultTeamName);
 
-    this.logger.debug(`Playwright: Submitting message...`);
+    this.logger.debug(`Playwright: Submitting message via composer...`);
     await composer.submitMessage(input.message, false);
 
     return {
@@ -244,32 +320,61 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
   }
 
   public async replyToMessage(input: ReplyToMessageInput): Promise<SendMessageResult> {
-    const user = await this.ensureAuthenticated();
-    const page = await this.webClient.getPage();
-    const channelPage = new MattermostChannelPage(page, this.baseUrl, this.logger);
-    const composer = new MattermostComposer(page, this.logger);
-
-    this.logger.debug(`Playwright: Navigating to channel '${input.channelId}' for reply...`);
-    await channelPage.navigateToChannel(input.channelId, this.defaultTeamName);
-
-    this.logger.debug(`Playwright: Submitting reply to thread...`);
-    await composer.submitMessage(input.message, true);
-
-    return {
-      id: `browser_reply_${Date.now()}`,
+    return this.sendMessage({
       channelId: input.channelId,
-      userId: user.id,
       message: input.message,
       rootId: input.rootId,
-      createdAt: new Date(),
-    };
+      idempotencyKey: input.idempotencyKey,
+    });
   }
 
   public async getMessages(input: GetMessagesInput): Promise<Post[]> {
     await this.ensureAuthenticated();
     const page = await this.webClient.getPage();
-    const channelPage = new MattermostChannelPage(page, this.baseUrl, this.logger);
 
+    // 1. Primary Strategy: In-Browser API fetch
+    try {
+      const rawList = await page.evaluate(
+        async ({ channelId, limit, since }) => {
+          const params = new URLSearchParams({
+            page: '0',
+            per_page: (limit || 30).toString(),
+          });
+          if (since) params.set('since', since.toString());
+
+          const res = await fetch(`/api/v4/channels/${channelId}/posts?${params.toString()}`, {
+            credentials: 'include',
+          });
+          if (res.ok) {
+            return res.json();
+          }
+          return null;
+        },
+        { channelId: input.channelId, limit: input.limit, since: input.since }
+      );
+
+      if (rawList && Array.isArray(rawList.order) && rawList.posts) {
+        return rawList.order
+          .map((id: string) => rawList.posts[id])
+          .filter(Boolean)
+          .map((p: any) => ({
+            id: p.id,
+            createAt: p.create_at,
+            updateAt: p.update_at,
+            deleteAt: p.delete_at,
+            userId: p.user_id,
+            channelId: p.channel_id,
+            rootId: p.root_id,
+            message: p.message,
+            type: p.type,
+            props: p.props,
+          }));
+      }
+    } catch {
+      // Fallback
+    }
+
+    const channelPage = new MattermostChannelPage(page, this.baseUrl, this.logger);
     await channelPage.navigateToChannel(input.channelId, this.defaultTeamName);
     const rawPosts = await channelPage.getRecentPosts(input.limit || 10);
 
