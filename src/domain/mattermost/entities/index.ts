@@ -45,6 +45,7 @@ export interface Post {
 export interface SendMessageInput {
   channelId: string;
   message: string;
+  from?: string;
   rootId?: string;
   idempotencyKey?: string;
 }
@@ -62,6 +63,7 @@ export interface ReplyToMessageInput {
   channelId: string;
   rootId: string;
   message: string;
+  from?: string;
   idempotencyKey?: string;
 }
 

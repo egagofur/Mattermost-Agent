@@ -38,6 +38,7 @@ export const ConfigSchema = z
 
     MATTERMOST_CHANNELS_CONFIG: z.string().optional(),
     MATTERMOST_ENV: z.string().optional(),
+    MATTERMOST_DEFAULT_FROM: z.string().optional(),
 
     MATTERMOST_BROWSER_PROFILE_DIR: z
       .string()
@@ -76,6 +77,7 @@ export function loadConfig(overrides?: Partial<Record<string, string | boolean |
     MATTERMOST_EXPECTED_USERNAME: process.env.MATTERMOST_EXPECTED_USERNAME,
     MATTERMOST_CHANNELS_CONFIG: process.env.MATTERMOST_CHANNELS_CONFIG,
     MATTERMOST_ENV: process.env.MATTERMOST_ENV,
+    MATTERMOST_DEFAULT_FROM: process.env.MATTERMOST_DEFAULT_FROM,
     MATTERMOST_BROWSER_PROFILE_DIR: process.env.MATTERMOST_BROWSER_PROFILE_DIR,
     MATTERMOST_HEADLESS: process.env.MATTERMOST_HEADLESS,
     LOG_LEVEL: process.env.LOG_LEVEL,

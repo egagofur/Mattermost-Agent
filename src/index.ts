@@ -35,5 +35,8 @@ export { ChannelSyncService } from './infrastructure/mattermost/services/channel
 export type { ChannelSyncOptions, ChannelSyncResult } from './infrastructure/mattermost/services/channel-sync-service';
 export { IdempotencyManager } from './infrastructure/mattermost/services/idempotency';
 export type { IdempotencyOptions } from './infrastructure/mattermost/services/idempotency';
+export { ThreadService } from './infrastructure/mattermost/services/thread-service';
+export type { ThreadSummary, LastThreadState } from './infrastructure/mattermost/services/thread-service';
+export { formatMessageWithAttribution } from './infrastructure/mattermost/services/message-formatter';
 export { Logger, defaultLogger } from './infrastructure/mattermost/services/logger';
 export type { LogLevel, StructuredLogPayload } from './infrastructure/mattermost/services/logger';

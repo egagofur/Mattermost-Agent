@@ -238,59 +238,96 @@ npm run cli -- aliases
 
 ## 💻 CLI Reference
 
-Run via `npm run cli -- <command>` or link globally using `npm link`:
+Run via `npm run <script> -- <args>` or `npm run cli -- <command>`:
 
 ```text
 Usage: mattermost [options] [command]
 
-Options:
-  -V, --version                Output the version number
-  --json                       Output results in structured JSON format
-  -u, --url <url>              Mattermost server URL override
-  -t, --token <token>          Personal Access Token override
-  -p, --provider <provider>    Provider override ("api" | "playwright")
-  --team-id <teamId>           Team ID override
-  -h, --help                   Display help for command
-
 Commands:
-  whoami                       Verify personal identity and display current account
-  send [options]               Send a message to a channel
-  reply [options]              Reply to a message thread
-  channel [options] <channel>  Look up and resolve a channel by name or ID
-  read [options] <channel>     Read recent messages from a channel
-  action [jsonPayload]         Execute a domain action via JSON string or stdin
-  login                        Open browser for one-time manual login (Playwright)
+  whoami                             Verify personal identity and display current account
+  send [channel] [message]           Send a message (e.g. `send per-fe-an "Hello"`)
+  reply [channel] [rootId] [message] Reply to a thread (supports :1, :latest, --find, permalink)
+  threads [channel] [query]          List & search active threads in a channel
+  channels [query]                   List & search configured channels in channels.yml
+  enable <channel>                   Enable a channel in channels.yml
+  disable <channel>                  Disable a channel in channels.yml
+  read [channel]                     Read recent messages from a channel
+  sync                               Auto-discover all accessible channels from server
+  login                              Open browser window for manual login (Playwright)
+  action [jsonPayload]               Execute a domain action via JSON or stdin
 ```
 
-### Examples
+### 🧵 Thread Discovery & Smart Replying
 
-#### Verify Authenticated Identity
+Finding thread IDs is now effortless. You no longer need to copy random 26-character hashes!
+
+#### 1. Inspect Active Threads
 ```bash
-npm run cli -- whoami
+npm run threads -- per-fe-an
 ```
 ```text
-✅ Mattermost Identity Verified
-   User ID:   7x8y9z1234567890abcdef1234
-   Username:  egagofur
-   Name:      Ega Gofur
-   Email:     ega@example.com
-   Roles:     system_user
+🧵 Active Threads in #per-fe-an (11 threads):
+-----------------------------------------------------------------------------------------
+[1] pyo47np3djgqjdpgq8xrrmdwiw • 8m ago • (0 replies)
+    "Testing user-friendly positional syntax!"
+
+[2] 31ewigbaoigepj5qsh3xb9bbjo • 15m ago • (2 replies)
+    "Testing from Mettermost Agent"
+    ↳ Last reply (10m ago): "Ini balasan di thread"
+-----------------------------------------------------------------------------------------
 ```
 
-#### Send a Message to a Channel
+#### 2. Reply via Numbered Shortcut (`:1`, `:latest`)
 ```bash
-npm run cli -- send --channel engineering --message "MR !456 is ready for review."
+# Reply to the most recent thread in the channel:
+npm run reply -- per-fe-an :1 "Approved and ready to merge!"
+npm run reply -- per-fe-an :latest "Approved and ready to merge!"
 ```
 
-#### Reply to a Thread
+#### 3. Reply by Searching Message Keywords (`--find` / `-f`)
 ```bash
-npm run cli -- reply --channel engineering --root-id post_789abc --message "Tests passed successfully on staging."
+# Finds the thread mentioning "Standup" and replies there automatically:
+npm run reply -- per-fe-an --find "Standup" "Hadir, update task hari ini aman"
 ```
 
-#### Inspect Channel Details
+#### 4. Reply via Mattermost Permalink URL
 ```bash
-npm run cli -- channel engineering
+npm run reply -- "https://mattermost.example.com/core/pl/31ewigbaoigepj5qsh3xb9bbjo" "Looks good to me!"
 ```
+
+#### 5. Reply to the Last Sent Message (`--last`)
+```bash
+npm run send -- per-fe-an "Deployment started..."
+npm run reply -- per-fe-an --last "Deployment completed successfully! ✅"
+```
+
+---
+
+### 🏷️ AI & Automation Attribution Footer
+
+To maintain transparency and ensure team members know whether a message was sent manually by the person or by an AI / CI tool, use the `from` property:
+
+```bash
+# Add custom attribution footer:
+npm run send -- per-fe-an "MR !123 is ready for review." --from "AI"
+npm run send -- per-fe-an "Pipeline #45 passed" --from "GitLab CI"
+```
+**Rendered message in Mattermost:**
+> MR !123 is ready for review.
+> 
+> *~ from AI*
+
+* **Set Default via `.env`**: `MATTERMOST_DEFAULT_FROM=AI`
+* **Suppress attribution**: Pass `--no-from` in CLI.
+* **JSON Action / AI Agent**:
+  ```json
+  {
+    "action": "send_message",
+    "channel": "per-fe-an",
+    "message": "PR is ready for review.",
+    "from": "AI Agent"
+  }
+  ```
 
 #### Read Recent Channel Posts
 ```bash

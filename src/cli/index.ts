@@ -6,6 +6,7 @@ import { MattermostAutomationService } from '../application/mattermost/services/
 import { loadConfig, MattermostConfig } from '../config/env';
 import { MattermostError } from '../domain/mattermost/errors';
 import { ChannelConfigLoader } from '../infrastructure/mattermost/services/channel-config-loader';
+import { ThreadService } from '../infrastructure/mattermost/services/thread-service';
 
 const program = new Command();
 
@@ -119,9 +120,11 @@ program
 // send
 program
   .command('send [channel] [message]')
-  .description('Send a message to a channel as personal user (e.g. `mattermost send per-fe-an "Hello"`)')
+  .description('Send a message to a channel as personal user (e.g. `mattermost send per-fe-an "Hello" --from "AI"`)')
   .option('-c, --channel <channel>', 'Channel name, slug, or ID')
   .option('-m, --message <message>', 'Message body to send')
+  .option('--from <sender>', 'Sender attribution label (e.g. "AI" -> "_~ from AI_")')
+  .option('--no-from', 'Suppress sender attribution footer')
   .option('-r, --root-id <rootId>', 'Root ID to reply inside a thread')
   .option('--team <teamId>', 'Team ID or slug')
   .option('--idempotency-key <key>', 'Custom idempotency key to avoid duplicate sends')
@@ -131,16 +134,18 @@ program
 
     if (!targetChannel || !targetMessage) {
       console.error('\n❌ Error: Channel and Message are required.');
-      console.error('   Usage: npm run cli -- send <channel> "<message>"');
+      console.error('   Usage: npm run cli -- send <channel> "<message>" [--from "AI"]');
       console.error('   Or:    npm run cli -- send -c <channel> -m "<message>"\n');
       process.exit(1);
     }
 
     const service = getService();
     try {
+      const fromLabel = opts.from === false ? '' : opts.from;
       const result = await service.sendMessage({
         channel: targetChannel,
         message: targetMessage,
+        from: fromLabel,
         rootId: opts.rootId,
         teamId: opts.team,
         idempotencyKey: opts.idempotencyKey,
@@ -167,30 +172,71 @@ program
 // reply
 program
   .command('reply [channel] [rootId] [message]')
-  .description('Reply to a message thread in a channel (e.g. `mattermost reply per-fe-an <rootId> "Reply text"`)')
+  .description('Reply to a message thread (e.g. `mattermost reply per-fe-an :1 "Reply text" --from "AI"`)')
   .option('-c, --channel <channel>', 'Channel name, slug, or ID')
-  .option('-r, --root-id <rootId>', 'Root thread ID to reply to')
+  .option('-r, --root-id <rootId>', 'Root thread ID, permalink URL, or shortcut (:1, :latest, :last)')
+  .option('-f, --find <keyword>', 'Find thread matching keyword (e.g. -f "Standup")')
+  .option('--from <sender>', 'Sender attribution label (e.g. "AI" -> "_~ from AI_")')
+  .option('--no-from', 'Suppress sender attribution footer')
+  .option('--last', 'Reply to the last message sent in this session')
   .option('-m, --message <message>', 'Message body to send')
   .option('--team <teamId>', 'Team ID or slug')
   .option('--idempotency-key <key>', 'Custom idempotency key')
   .action(async (posChannel, posRootId, posMessage, opts) => {
-    const targetChannel = posChannel || opts.channel;
-    const targetRootId = posRootId || opts.rootId;
-    const targetMessage = posMessage || opts.message;
+    let targetChannel = posChannel || opts.channel;
+    let targetRootId = posRootId || opts.rootId;
+    let targetMessage = posMessage || opts.message;
+
+    // Support: mattermost reply --last "My message" or mattermost reply <channel> --last "My message"
+    if (opts.last || targetChannel === ':last' || targetChannel === '--last' || targetChannel === 'last') {
+      const threadService = new ThreadService(null as any);
+      const lastState = threadService.getLastThread();
+      if (!targetMessage && (posRootId || posChannel)) {
+        targetMessage = posRootId || posChannel;
+      }
+      targetRootId = ':last';
+      if (!targetChannel || targetChannel === ':last' || targetChannel === '--last' || targetChannel === 'last') {
+        targetChannel = lastState?.channelId || 'town-square';
+      }
+    }
+
+    // Support: mattermost reply <channel> -f "Standup" "My message"
+    if (opts.find) {
+      targetRootId = `find:${opts.find}`;
+      if (!targetMessage && posRootId) {
+        targetMessage = posRootId;
+      }
+    }
+
+    // Support: permalink URL as first argument
+    if (targetChannel && targetChannel.startsWith('http')) {
+      const extracted = ThreadService.extractPostIdFromPermalink(targetChannel);
+      if (extracted) {
+        targetRootId = extracted;
+        targetMessage = posRootId || posMessage || opts.message;
+        // Channel can default to town-square or let server handle
+        targetChannel = opts.channel || 'town-square';
+      }
+    }
 
     if (!targetChannel || !targetRootId || !targetMessage) {
-      console.error('\n❌ Error: Channel, Root ID, and Message are required.');
-      console.error('   Usage: npm run cli -- reply <channel> <rootId> "<message>"');
-      console.error('   Or:    npm run cli -- reply -c <channel> -r <rootId> -m "<message>"\n');
+      console.error('\n❌ Error: Channel, Thread Target, and Message are required.');
+      console.error('   Usage:');
+      console.error('     • By shortcut:  npm run reply -- <channel> :1 "<message>" [--from "AI"]');
+      console.error('     • By keyword:   npm run reply -- <channel> --find "<keyword>" "<message>"');
+      console.error('     • By post ID:   npm run reply -- <channel> <rootId> "<message>"');
+      console.error('     • To last post: npm run reply -- <channel> --last "<message>"\n');
       process.exit(1);
     }
 
     const service = getService();
     try {
+      const fromLabel = opts.from === false ? '' : opts.from;
       const result = await service.replyToMessage({
         channel: targetChannel,
         rootId: targetRootId,
         message: targetMessage,
+        from: fromLabel,
         teamId: opts.team,
         idempotencyKey: opts.idempotencyKey,
       });
@@ -202,7 +248,64 @@ program
         console.log(`   Message ID:  ${result.id}`);
         console.log(`   Root ID:     ${result.rootId}`);
         console.log(`   Channel ID:  ${result.channelId}`);
+        console.log(`   Created At:  ${result.createdAt.toISOString()}`);
         console.log('');
+      }
+    } catch (err) {
+      handleError(err);
+    } finally {
+      await service.close();
+    }
+  });
+
+// threads (Thread Inspector)
+program
+  .command('threads [channel] [query]')
+  .description('List and search active threads in a channel')
+  .option('-l, --limit <limit>', 'Number of posts to scan (max 100)', '50')
+  .option('--team <teamId>', 'Team ID or slug')
+  .action(async (channelArg, queryArg, opts) => {
+    if (!channelArg) {
+      console.error('\n❌ Error: Channel is required.');
+      console.error('   Usage: npm run threads -- <channel> [search_query]\n');
+      process.exit(1);
+    }
+
+    const service = getService();
+    try {
+      const result = await service.getThreads({
+        channel: channelArg,
+        limit: parseInt(opts.limit, 10),
+        query: queryArg,
+        teamId: opts.team,
+      });
+
+      if (program.opts().json) {
+        handleOutput(result, true);
+      } else {
+        const { channel, threads } = result;
+        const queryLabel = queryArg ? ` matching '${queryArg}'` : '';
+        console.log(`\n🧵 Active Threads in #${channel.displayName} (${threads.length} threads${queryLabel}):`);
+        console.log('-----------------------------------------------------------------------------------------');
+
+        if (threads.length === 0) {
+          console.log(`   No active threads found in #${channel.displayName}.`);
+        } else {
+          for (const t of threads) {
+            const repliesText = t.replyCount === 1 ? '1 reply' : `${t.replyCount} replies`;
+            console.log(`[${t.index}] ${t.rootId} • ${t.relativeTime} • (${repliesText})`);
+            console.log(`    "${t.messageSnippet}"`);
+            if (t.lastReplySnippet) {
+              console.log(`    ↳ Last reply (${t.lastReplyRelativeTime}): "${t.lastReplySnippet}"`);
+            }
+            console.log('');
+          }
+        }
+
+        console.log('-----------------------------------------------------------------------------------------');
+        console.log('💡 Quick Reply Shortcuts:');
+        console.log(`   • Reply to latest:   npm run reply -- ${channel.name} :1 "<your message>"`);
+        console.log(`   • Reply by keyword:  npm run reply -- ${channel.name} --find "<keyword>" "<your message>"\n`);
       }
     } catch (err) {
       handleError(err);

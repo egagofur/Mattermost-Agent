@@ -7,6 +7,7 @@ import { MattermostWebClient } from '../../../infrastructure/mattermost/playwrig
 import { MattermostPlaywrightProvider } from '../../../infrastructure/mattermost/playwright/playwright-provider';
 import { ChannelResolver } from '../../../infrastructure/mattermost/services/channel-resolver';
 import { ChannelSyncOptions, ChannelSyncService } from '../../../infrastructure/mattermost/services/channel-sync-service';
+import { ThreadService, ThreadSummary } from '../../../infrastructure/mattermost/services/thread-service';
 import { IdempotencyManager } from '../../../infrastructure/mattermost/services/idempotency';
 import { Logger } from '../../../infrastructure/mattermost/services/logger';
 import { ActionExecutor } from '../actions';
@@ -74,6 +75,7 @@ export class MattermostAutomationService {
       channelResolver: this.channelResolver,
       idempotencyManager: this.idempotencyManager,
       logger: this.logger,
+      defaultFrom: this.config.MATTERMOST_DEFAULT_FROM,
       expectedUserId: this.config.MATTERMOST_EXPECTED_USER_ID,
       expectedUsername: this.config.MATTERMOST_EXPECTED_USERNAME,
     });
@@ -104,6 +106,7 @@ export class MattermostAutomationService {
   public async sendMessage(params: {
     channel: string;
     message: string;
+    from?: string;
     rootId?: string;
     teamId?: string;
     idempotencyKey?: string;
@@ -112,6 +115,7 @@ export class MattermostAutomationService {
       action: 'send_message',
       channel: params.channel,
       message: params.message,
+      from: params.from,
       rootId: params.rootId,
       teamId: params.teamId,
       idempotencyKey: params.idempotencyKey,
@@ -125,6 +129,7 @@ export class MattermostAutomationService {
     channel: string;
     rootId: string;
     message: string;
+    from?: string;
     teamId?: string;
     idempotencyKey?: string;
   }): Promise<SendMessageResult> {
@@ -133,6 +138,7 @@ export class MattermostAutomationService {
       channel: params.channel,
       rootId: params.rootId,
       message: params.message,
+      from: params.from,
       teamId: params.teamId,
       idempotencyKey: params.idempotencyKey,
     });
@@ -195,6 +201,21 @@ export class MattermostAutomationService {
       since: params.since,
       teamId: params.teamId,
     });
+  }
+
+  /**
+   * Discovers and summarizes active threads in a channel.
+   */
+  public async getThreads(params: {
+    channel: string;
+    limit?: number;
+    query?: string;
+    teamId?: string;
+  }): Promise<{ channel: Channel; threads: ThreadSummary[] }> {
+    const channel = await this.channelResolver.resolve(params.channel, params.teamId);
+    const threadService = new ThreadService(this.provider, this.logger);
+    const threads = await threadService.getChannelThreads(channel.id, params.limit || 50, params.query);
+    return { channel, threads };
   }
 
   /**

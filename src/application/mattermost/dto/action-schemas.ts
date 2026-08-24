@@ -4,6 +4,7 @@ export const SendMessageActionSchema = z.object({
   action: z.literal('send_message'),
   channel: z.string().min(1, 'Channel is required.'),
   message: z.string().min(1, 'Message cannot be empty.'),
+  from: z.string().optional(),
   rootId: z.string().optional(),
   teamId: z.string().optional(),
   idempotencyKey: z.string().optional(),
@@ -14,6 +15,7 @@ export const ReplyToMessageActionSchema = z.object({
   channel: z.string().min(1, 'Channel is required.'),
   rootId: z.string().min(1, 'Root ID is required to reply to a thread.'),
   message: z.string().min(1, 'Message cannot be empty.'),
+  from: z.string().optional(),
   teamId: z.string().optional(),
   idempotencyKey: z.string().optional(),
 });

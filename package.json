@@ -13,6 +13,7 @@
     "cli": "tsx src/cli/index.ts",
     "send": "tsx src/cli/index.ts send",
     "reply": "tsx src/cli/index.ts reply",
+    "threads": "tsx src/cli/index.ts threads",
     "channels": "tsx src/cli/index.ts channels",
     "whoami": "tsx src/cli/index.ts whoami",
     "sync": "tsx src/cli/index.ts sync",

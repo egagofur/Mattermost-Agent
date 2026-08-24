@@ -11,6 +11,15 @@ build/
 .env.*
 !.env.example
 
+# Local channel mappings (contains workspace channel IDs & private channels)
+channels.yml
+channels.yaml
+.mattermost/channels.yml
+.mattermost/channels.yaml
+config/channels.yml
+config/channels.yaml
+!channels.example.yml
+
 # Browser automation profile & state
 data/
 browser-profile/

@@ -9,6 +9,8 @@ import { MattermostProvider } from '../../../domain/mattermost/providers/matterm
 import { ChannelResolver } from '../../../infrastructure/mattermost/services/channel-resolver';
 import { IdempotencyManager } from '../../../infrastructure/mattermost/services/idempotency';
 import { Logger, defaultLogger } from '../../../infrastructure/mattermost/services/logger';
+import { formatMessageWithAttribution } from '../../../infrastructure/mattermost/services/message-formatter';
+import { ThreadService } from '../../../infrastructure/mattermost/services/thread-service';
 import {
   ActionResult,
   GetChannelAction,
@@ -24,7 +26,9 @@ export interface ActionExecutorDependencies {
   provider: MattermostProvider;
   channelResolver: ChannelResolver;
   idempotencyManager: IdempotencyManager;
+  threadService?: ThreadService;
   logger?: Logger;
+  defaultFrom?: string;
   expectedUserId?: string;
   expectedUsername?: string;
 }
@@ -33,7 +37,9 @@ export class ActionExecutor {
   private provider: MattermostProvider;
   private channelResolver: ChannelResolver;
   private idempotencyManager: IdempotencyManager;
+  private threadService: ThreadService;
   private logger: Logger;
+  private defaultFrom?: string;
   private expectedUserId?: string;
   private expectedUsername?: string;
 
@@ -42,6 +48,8 @@ export class ActionExecutor {
     this.channelResolver = deps.channelResolver;
     this.idempotencyManager = deps.idempotencyManager;
     this.logger = deps.logger ?? defaultLogger;
+    this.threadService = deps.threadService ?? new ThreadService(deps.provider, this.logger);
+    this.defaultFrom = deps.defaultFrom;
     this.expectedUserId = deps.expectedUserId;
     this.expectedUsername = deps.expectedUsername;
   }
@@ -166,40 +174,84 @@ export class ActionExecutor {
   public async handleSendMessage(action: SendMessageAction): Promise<SendMessageResult> {
     const resolvedChannel = await this.channelResolver.resolve(action.channel, action.teamId);
 
-    const idempotencyKey = action.idempotencyKey || `send:${resolvedChannel.id}:${action.rootId || 'root'}:${action.message}`;
+    // If channel mapping has default_root_id and no rootId provided, apply it
+    let targetRootId = action.rootId;
+    if (!targetRootId) {
+      const mapping = this.channelResolver.getConfigLoader().getMapping(action.channel);
+      if (mapping?.defaultRootId) {
+        targetRootId = mapping.defaultRootId;
+      }
+    }
+
+    const effectiveFrom = action.from !== undefined ? action.from : this.defaultFrom;
+    const formattedMessage = formatMessageWithAttribution(action.message, effectiveFrom);
+
+    const idempotencyKey = action.idempotencyKey || `send:${resolvedChannel.id}:${targetRootId || 'root'}:${formattedMessage}`;
 
     return this.idempotencyManager.execute(idempotencyKey, async () => {
       this.logger.event('mattermost.message.send', {
         channelId: resolvedChannel.id,
-        hasRootId: Boolean(action.rootId),
+        hasRootId: Boolean(targetRootId),
+        from: effectiveFrom,
       });
 
-      return this.provider.sendMessage({
+      const result = await this.provider.sendMessage({
         channelId: resolvedChannel.id,
-        message: action.message,
-        rootId: action.rootId,
+        message: formattedMessage,
+        rootId: targetRootId,
         idempotencyKey,
       });
+
+      this.threadService.saveLastThread({
+        messageId: result.id,
+        channelId: resolvedChannel.id,
+        rootId: targetRootId,
+        channelName: resolvedChannel.name,
+        updatedAt: new Date().toISOString(),
+      });
+
+      return result;
     });
   }
 
   public async handleReplyToMessage(action: ReplyToMessageAction): Promise<SendMessageResult> {
     const resolvedChannel = await this.channelResolver.resolve(action.channel, action.teamId);
 
-    const idempotencyKey = action.idempotencyKey || `reply:${resolvedChannel.id}:${action.rootId}:${action.message}`;
+    const mapping = this.channelResolver.getConfigLoader().getMapping(action.channel);
+    const resolvedRootId = await this.threadService.resolveRootId({
+      channelId: resolvedChannel.id,
+      targetIdentifier: action.rootId,
+      defaultRootId: mapping?.defaultRootId,
+    });
+
+    const effectiveFrom = action.from !== undefined ? action.from : this.defaultFrom;
+    const formattedMessage = formatMessageWithAttribution(action.message, effectiveFrom);
+
+    const idempotencyKey = action.idempotencyKey || `reply:${resolvedChannel.id}:${resolvedRootId}:${formattedMessage}`;
 
     return this.idempotencyManager.execute(idempotencyKey, async () => {
       this.logger.event('mattermost.message.send', {
         channelId: resolvedChannel.id,
-        rootId: action.rootId,
+        rootId: resolvedRootId,
+        from: effectiveFrom,
       });
 
-      return this.provider.replyToMessage({
+      const result = await this.provider.replyToMessage({
         channelId: resolvedChannel.id,
-        rootId: action.rootId,
-        message: action.message,
+        rootId: resolvedRootId,
+        message: formattedMessage,
         idempotencyKey,
       });
+
+      this.threadService.saveLastThread({
+        messageId: result.id,
+        channelId: resolvedChannel.id,
+        rootId: resolvedRootId,
+        channelName: resolvedChannel.name,
+        updatedAt: new Date().toISOString(),
+      });
+
+      return result;
     });
   }
 
