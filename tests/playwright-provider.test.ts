@@ -13,6 +13,29 @@ describe('MattermostPlaywrightProvider', () => {
       url: vi.fn().mockReturnValue('https://mattermost.example.com/team/channels/town-square'),
       waitForTimeout: vi.fn().mockResolvedValue(null),
       waitForSelector: vi.fn().mockResolvedValue(null),
+      evaluate: vi.fn().mockImplementation(async () => [
+        {
+          id: 'chan_101',
+          team_id: 'team_1',
+          name: 'engineering',
+          display_name: 'Engineering',
+          type: 'O',
+        },
+        {
+          id: 'chan_102',
+          team_id: 'team_1',
+          name: 'backend-dev',
+          display_name: 'Backend Dev',
+          type: 'P',
+        },
+        {
+          id: 'chan_103',
+          team_id: 'team_2',
+          name: 'sre-alerts',
+          display_name: 'SRE Alerts',
+          type: 'P',
+        },
+      ]),
       locator: vi.fn().mockReturnValue({
         first: vi.fn().mockReturnValue({
           isVisible: vi.fn().mockResolvedValue(true),
@@ -67,5 +90,20 @@ describe('MattermostPlaywrightProvider', () => {
       expect.stringContaining('/channels/town-square'),
       expect.any(Object)
     );
+  });
+
+  it('lists all channels across teams using in-browser session evaluation', async () => {
+    const provider = new MattermostPlaywrightProvider({
+      webClient: mockWebClient,
+      baseUrl: 'https://mattermost.example.com',
+    });
+
+    const channels = await provider.listChannels();
+
+    expect(channels).toHaveLength(3);
+    expect(channels[0].name).toBe('engineering');
+    expect(channels[1].name).toBe('backend-dev');
+    expect(channels[2].name).toBe('sre-alerts');
+    expect(channels[2].teamId).toBe('team_2');
   });
 });

@@ -113,7 +113,8 @@ channels:
   });
 
   it('throws MattermostChannelNotFoundError when channel and fallback cannot be found', async () => {
-    const resolver = new ChannelResolver(mockProvider);
+    const emptyLoader = new ChannelConfigLoader({ configPath: 'empty-test.yml' });
+    const resolver = new ChannelResolver(mockProvider, { configLoader: emptyLoader });
     await expect(resolver.resolve('totally-unknown-channel')).rejects.toThrow(
       MattermostChannelNotFoundError
     );
