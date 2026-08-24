@@ -28,15 +28,21 @@
 
 ## 💡 Why This Exists
 
-Most Mattermost automation tools rely on **Incoming Webhooks**, **Bot Accounts**, or separate administrative identities. In enterprise engineering teams, this presents several problems:
+Most Mattermost automation tools rely on **Incoming Webhooks**, **Bot Accounts**, or **Personal Access Tokens (PAT)**. In corporate and enterprise environments, this presents major blockers:
 
-1. **Identity Attribution**: Notifications, MR updates, and QA triggers appear as generic bots rather than from the engineer who actually triggered them.
-2. **Permission & Audit Friction**: Setting up bots or incoming webhooks often requires workspace administrator privileges.
-3. **Workflow Fragmentation**: Developers cannot easily integrate local CI/Git hooks with their real corporate Mattermost identity.
+1. **Permission Friction (Not Everyone is an Admin)**: Regular team members cannot generate Personal Access Tokens or create webhooks arbitrarily because workspace policies restrict these to administrators.
+2. **Identity Attribution**: Messages sent via bot accounts or incoming webhooks look like impersonal bots, stripping away personal responsibility and developer context (e.g. who made the PR or deployed the fix).
+3. **SSO & MFA Obstacles**: Corporate instances often require Google Workspace / Okta / SAML login with MFA, which standard script-based HTTP bots cannot bypass without administrative API tokens.
 
-**Mattermost Personal Account Automation** solves this by providing a clean, modular abstraction layer that performs actions directly under your personal account using:
-* **Strategy 1 (Primary)**: Mattermost REST API v4 with Personal Access Tokens (PAT).
-* **Strategy 2 (Fallback)**: Resilient Playwright browser automation with persistent session contexts for organizations where PATs are restricted.
+**Mattermost Personal Account Automation** solves this by prioritizing a **Zero-Admin Browser Automation Layer (Playwright)** as the primary default strategy, with direct API support as a fast alternative:
+
+* **🌟 Strategy 1 — Persistent Browser Context (Playwright — Primary & Default)**:
+  * Zero admin privileges required.
+  * Works for **any** corporate user with a standard Mattermost account.
+  * Full support for SSO (Google, Okta, GitLab, SAML) and Multi-Factor Authentication (MFA).
+  * You log in manually once via `npm run cli -- login`. The session is securely saved locally and reused headless.
+* **⚡ Strategy 2 — REST API v4 (Personal Access Tokens — Optional Alternative)**:
+  * For power users or environments where Personal Access Tokens are explicitly permitted.
 
 ---
 
@@ -47,7 +53,7 @@ The system enforces strict separation of concerns across Domain, Infrastructure,
 ```mermaid
 flowchart TD
     subgraph TriggerLayer ["Client & Trigger Layer"]
-        CLI["CLI Command (mattermost send / whoami)"]
+        CLI["CLI Command (mattermost send / whoami / sync)"]
         Agent["AI Agent / CI Hook / Unix Pipe (JSON Action)"]
         CodeSDK["Node.js / TypeScript Application"]
     end
@@ -56,19 +62,20 @@ flowchart TD
         Service["MattermostAutomationService"]
         Actions["Domain Actions (send_message, reply_to_message, read_channel, get_channel, whoami)"]
         Validator["Zod Action Validator"]
-        Resolver["ChannelResolver (TTL Cache & Normalization)"]
+        Resolver["ChannelResolver (YAML Aliases & TTL Cache)"]
+        SyncService["ChannelSyncService (Auto-Discovery)"]
         Idempotency["IdempotencyManager (In-Flight Promise Sharing)"]
     end
 
     subgraph DomainLayer ["Domain Layer"]
         ProviderInterface["interface MattermostProvider"]
         Entities["Entities (User, Channel, Post, Team)"]
-        Errors["Typed Error Hierarchy (AuthError, RateLimitError, NotFoundError)"]
+        Errors["Typed Error Hierarchy (AuthError, DisabledError, NotFoundError)"]
     end
 
     subgraph InfraLayer ["Infrastructure Layer"]
-        ApiProvider["MattermostApiProvider (REST API v4 + Exponential Retry)"]
-        PlaywrightProvider["MattermostPlaywrightProvider (Persistent Session Context)"]
+        PlaywrightProvider["MattermostPlaywrightProvider (Primary: Persistent Session)"]
+        ApiProvider["MattermostApiProvider (Alternative: REST API v4)"]
         PageObjects["Page Objects (MattermostComposer, MattermostChannelPage)"]
         Logger["Structured Logger (Automated Secret Sanitization)"]
     end
@@ -80,9 +87,10 @@ flowchart TD
     Validator --> Actions
     Actions --> Resolver
     Actions --> Idempotency
+    Service --> SyncService
     Actions --> ProviderInterface
-    ProviderInterface -.-> ApiProvider
     ProviderInterface -.-> PlaywrightProvider
+    ProviderInterface -.-> ApiProvider
     PlaywrightProvider --> PageObjects
     ApiProvider --> Logger
     PlaywrightProvider --> Logger
@@ -94,14 +102,15 @@ flowchart TD
 
 | Feature | Description |
 | :--- | :--- |
-| **Personal Account Attribution** | All posts, replies, and channel operations are attributed to your personal account. |
-| **Dual Provider Support** | Switch seamlessly between REST API v4 (`api`) and Persistent Browser (`playwright`) without touching application code. |
-| **Smart Channel Resolution** | Accepts channel names (`engineering`), slugs (`~engineering`), display names (`Engineering Team`), or 26-char IDs with in-memory TTL caching. |
+| **Zero-Admin Setup** | Uses persistent Playwright session by default so standard non-admin users can automate without tokens or webhook creation. |
+| **Personal Account Attribution** | All posts, replies, and channel operations appear authentically as your personal Mattermost user. |
+| **Auto Channel Discovery** | Auto-discovers all channels across teams on login and generates `channels.yml` with `enabled: true/false` toggles. |
+| **Dual Provider Support** | Primary Playwright provider + optional high-speed REST API v4 provider via configuration switch. |
+| **Smart Channel Resolution** | Accepts channel names (`engineering`), YAML aliases (`backend-dev`), slugs (`~engineering`), or 26-char IDs. |
 | **Idempotency & Deduplication** | In-flight execution lock and cached response store prevents duplicate messages during retry storms. |
-| **Identity Verification Lock** | Startup self-check verifies identity against `MATTERMOST_EXPECTED_USER_ID` or username, preventing unintended execution. |
+| **Identity Verification Lock** | Startup self-check verifies identity against `MATTERMOST_EXPECTED_USER_ID`, preventing unintended execution. |
 | **Zero Credential Leaks** | Automated regex scrubbing masks Bearer tokens, cookies, passwords, and session data in logs, errors, and CLI outputs. |
 | **AI Agent / CLI Integration** | Native JSON action interface supporting standard Unix pipes (`echo '{...}' \| mattermost action`). |
-| **Type-Safe Domain Actions** | Runtime payload validation powered by Zod with descriptive typed errors and retry classification. |
 
 ---
 
@@ -112,7 +121,6 @@ flowchart TD
 - **npm**, **pnpm**, or **bun**
 
 ### 2. Installation
-Clone the repository and install dependencies:
 ```bash
 git clone https://github.com/egagofur/Mattermost-Agent.git
 cd Mattermost-Agent
@@ -125,52 +133,38 @@ Copy `.env.example` to `.env`:
 cp .env.example .env
 ```
 
-Set your configuration in `.env`:
+Set your Mattermost server URL:
 ```env
-# Mattermost Base URL
 MATTERMOST_URL=https://mattermost.example.com
-
-# Provider: 'api' (default) or 'playwright'
-MATTERMOST_PROVIDER=api
-
-# API Authentication (Required for 'api' provider)
-MATTERMOST_TOKEN=your_personal_access_token_here
-
-# Optional Team Context
-MATTERMOST_TEAM_ID=
-MATTERMOST_TEAM_NAME=
-
-# Optional Identity Verification Lock
-MATTERMOST_EXPECTED_USER_ID=
-MATTERMOST_EXPECTED_USERNAME=
-
-# Playwright Settings (Used if MATTERMOST_PROVIDER=playwright)
-MATTERMOST_BROWSER_PROFILE_DIR=./data/mattermost-browser
-MATTERMOST_HEADLESS=true
-
-# Logging Level: debug, info, warn, error
-LOG_LEVEL=info
+MATTERMOST_PROVIDER=playwright
 ```
+
+### 4. One-Time Login & Auto Channel Discovery
+Authenticate once using the interactive login helper:
+```bash
+npm run cli -- login
+```
+A browser window will open. Complete your standard login (including Google/Okta SSO or MFA). Once completed, the session is saved to `data/mattermost-browser/` and all your accessible channels are automatically synced to `channels.yml`!
 
 ---
 
 ## 🔑 Authentication Setup
 
-### Strategy 1 — Personal Access Token (API Provider)
-1. Log in to Mattermost in your browser.
-2. Go to **Settings** $\rightarrow$ **Security** $\rightarrow$ **Personal Access Tokens**.
-3. Click **Create Token**, give it a description, and copy the generated token.
-4. Set `MATTERMOST_TOKEN=<your_token>` in `.env`.
-
-### Strategy 2 — Persistent Browser Session (Playwright Provider)
-If your Mattermost workspace administrator disables Personal Access Tokens:
-1. Set `MATTERMOST_PROVIDER=playwright` in `.env`.
-2. Run the interactive setup command:
+### Strategy 1 — Persistent Browser Session (Playwright — Primary & Default)
+Recommended for **all users** (no administrator privileges needed):
+1. Keep `MATTERMOST_PROVIDER=playwright` in `.env`.
+2. Run:
    ```bash
    npm run cli -- login
    ```
-3. A browser window will open. Complete your standard login and MFA manually.
-4. Once logged in, the session is saved to `data/mattermost-browser/` and will be reused automatically for headless execution.
+3. Complete your login in the browser window.
+4. From then on, all commands (`send`, `read`, `sync`, etc.) run headlessly in the background using your authenticated profile.
+
+### Strategy 2 — Personal Access Token (API Provider — Optional Alternative)
+For users whose Mattermost installation permits generating Personal Access Tokens:
+1. Set `MATTERMOST_PROVIDER=api` in `.env`.
+2. Generate a token under **Settings** $\rightarrow$ **Security** $\rightarrow$ **Personal Access Tokens**.
+3. Set `MATTERMOST_TOKEN=<your_token>` in `.env`.
 
 ---
 

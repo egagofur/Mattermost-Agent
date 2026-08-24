@@ -38,6 +38,15 @@ describe('Config', () => {
     expect(config.MATTERMOST_PROVIDER).toBe('playwright');
   });
 
+  it('defaults to playwright provider when not specified', () => {
+    const config = loadConfig({
+      MATTERMOST_URL: 'https://mattermost.example.com',
+    });
+
+    expect(config.MATTERMOST_PROVIDER).toBe('playwright');
+    expect(config.MATTERMOST_HEADLESS).toBe(true);
+  });
+
   it('throws error when MATTERMOST_URL is missing or invalid', () => {
     expect(() =>
       loadConfig({

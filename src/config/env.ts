@@ -26,7 +26,7 @@ export const ConfigSchema = z
 
     MATTERMOST_PROVIDER: z
       .enum(['api', 'playwright'])
-      .default('api'),
+      .default('playwright'),
 
     MATTERMOST_TOKEN: z.string().optional(),
 
