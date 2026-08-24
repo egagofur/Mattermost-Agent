@@ -11,6 +11,11 @@
   "scripts": {
     "build": "tsc",
     "cli": "tsx src/cli/index.ts",
+    "send": "tsx src/cli/index.ts send",
+    "reply": "tsx src/cli/index.ts reply",
+    "channels": "tsx src/cli/index.ts channels",
+    "whoami": "tsx src/cli/index.ts whoami",
+    "sync": "tsx src/cli/index.ts sync",
     "start": "tsx src/index.ts",
     "test": "vitest run",
     "test:watch": "vitest",

@@ -215,6 +215,24 @@ export class ChannelConfigLoader {
     this.mappings.set(mapping.alias.toLowerCase(), mapping);
   }
 
+  public getConfigPath(): string | undefined {
+    return this.configPath;
+  }
+
+  public toggleChannel(alias: string, enabled: boolean): boolean {
+    const clean = alias.toLowerCase().trim().replace(/^~/, '');
+    const mapping = this.mappings.get(clean);
+    if (!mapping) {
+      return false;
+    }
+    mapping.enabled = enabled;
+    this.mappings.set(clean, mapping);
+
+    const targetPath = this.configPath || 'channels.yml';
+    this.saveToFile(targetPath);
+    return true;
+  }
+
   public hasMappings(): boolean {
     return this.mappings.size > 0;
   }

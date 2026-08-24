@@ -54,6 +54,10 @@ export class ChannelResolver {
     return this.configLoader;
   }
 
+  public toggleChannel(alias: string, enabled: boolean): boolean {
+    return this.configLoader.toggleChannel(alias, enabled);
+  }
+
   public getAliases(): NormalizedChannelMapping[] {
     return this.configLoader.getAllMappings();
   }

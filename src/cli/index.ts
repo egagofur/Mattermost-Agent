@@ -1,29 +1,28 @@
 #!/usr/bin/env node
+
 import { Command } from 'commander';
 import * as fs from 'fs';
 import { MattermostAutomationService } from '../application/mattermost/services/automation-service';
-import { ChannelConfigLoader } from '../infrastructure/mattermost/services/channel-config-loader';
-import { loadConfig } from '../config/env';
+import { loadConfig, MattermostConfig } from '../config/env';
 import { MattermostError } from '../domain/mattermost/errors';
+import { ChannelConfigLoader } from '../infrastructure/mattermost/services/channel-config-loader';
 
 const program = new Command();
 
 program
   .name('mattermost')
-  .description('Personal Account Automation CLI for Mattermost')
+  .description('Personal Account Automation CLI for Mattermost (Playwright & API)')
   .version('1.0.0')
-  .option('--json', 'Output results formatted as JSON')
-  .option('-u, --url <url>', 'Mattermost server URL')
-  .option('-t, --token <token>', 'Mattermost Personal Access Token')
-  .option('-p, --provider <provider>', 'Provider to use: "api" or "playwright"')
-  .option('--team-id <teamId>', 'Mattermost Team ID')
-  .option('--channels-config <path>', 'Path to YAML channel mapping configuration file')
-  .option('--env <environment>', 'Active environment overlay for channel mappings (e.g. dev, staging, prod)');
+  .option('--json', 'Output results in structured JSON format', false)
+  .option('-u, --url <url>', 'Mattermost server URL override')
+  .option('-t, --token <token>', 'Personal Access Token override')
+  .option('-p, --provider <provider>', 'Provider override ("api" | "playwright")')
+  .option('--team-id <teamId>', 'Team ID override')
+  .option('--channels-config <path>', 'Custom channels YAML config path')
+  .option('--env <environment>', 'Active environment overlay (e.g. dev, staging, prod)');
 
-function getService(cmdOpts: Record<string, unknown> = {}): MattermostAutomationService {
+function getService(overrides: Partial<MattermostConfig> = {}): MattermostAutomationService {
   const globalOpts = program.opts();
-  const overrides: Record<string, string | undefined> = {};
-
   if (globalOpts.url) overrides.MATTERMOST_URL = globalOpts.url;
   if (globalOpts.token) overrides.MATTERMOST_TOKEN = globalOpts.token;
   if (globalOpts.provider) overrides.MATTERMOST_PROVIDER = globalOpts.provider;
@@ -44,11 +43,7 @@ function handleOutput(data: unknown, jsonMode = false): void {
   if (jsonMode || program.opts().json) {
     console.log(JSON.stringify(data, null, 2));
   } else {
-    if (typeof data === 'string') {
-      console.log(data);
-    } else {
-      console.log(data);
-    }
+    console.log(data);
   }
 }
 
@@ -56,19 +51,34 @@ function handleError(err: unknown): void {
   const isJson = program.opts().json;
   if (err instanceof MattermostError) {
     if (isJson) {
-      console.error(JSON.stringify({ success: false, error: { code: err.code, message: err.message, details: err.details } }, null, 2));
+      console.error(
+        JSON.stringify(
+          { success: false, error: { code: err.code, message: err.message, details: err.details } },
+          null,
+          2
+        )
+      );
     } else {
       console.error(`\n❌ Error [${err.code}]: ${err.message}`);
       if (err.details && Object.keys(err.details).length > 0) {
         console.error(`   Details:`, err.details);
       }
+      if (err.code === 'CHANNEL_DISABLED') {
+        const chan = (err.details?.channelIdentifier || err.details?.alias || 'channel') as string;
+        console.error(`\n💡 Tip: Run 'npm run cli -- enable ${chan}' to enable this channel.`);
+      } else if (err.code === 'CHANNEL_NOT_FOUND') {
+        console.error(`\n💡 Tip: Run 'npm run cli -- sync' to auto-discover all accessible channels.`);
+      } else if (err.code === 'AUTH_FAILED') {
+        console.error(`\n💡 Tip: Run 'npm run cli -- login' to authenticate your browser session.`);
+      }
+      console.error('');
     }
   } else {
     const msg = err instanceof Error ? err.message : String(err);
     if (isJson) {
       console.error(JSON.stringify({ success: false, error: { code: 'UNEXPECTED_ERROR', message: msg } }, null, 2));
     } else {
-      console.error(`\n❌ Unexpected Error: ${msg}`);
+      console.error(`\n❌ Unexpected Error: ${msg}\n`);
     }
   }
   process.exit(1);
@@ -77,7 +87,7 @@ function handleError(err: unknown): void {
 // whoami
 program
   .command('whoami')
-  .description('Verify personal identity and display current authenticated account')
+  .description('Verify personal identity and display current account')
   .action(async () => {
     const service = getService();
     try {
@@ -108,19 +118,29 @@ program
 
 // send
 program
-  .command('send')
-  .description('Send a message to a channel as personal user')
-  .requiredOption('-c, --channel <channel>', 'Channel name, slug, or ID')
-  .requiredOption('-m, --message <message>', 'Message body to send')
+  .command('send [channel] [message]')
+  .description('Send a message to a channel as personal user (e.g. `mattermost send per-fe-an "Hello"`)')
+  .option('-c, --channel <channel>', 'Channel name, slug, or ID')
+  .option('-m, --message <message>', 'Message body to send')
   .option('-r, --root-id <rootId>', 'Root ID to reply inside a thread')
   .option('--team <teamId>', 'Team ID or slug')
   .option('--idempotency-key <key>', 'Custom idempotency key to avoid duplicate sends')
-  .action(async (opts) => {
+  .action(async (posChannel, posMessage, opts) => {
+    const targetChannel = posChannel || opts.channel;
+    const targetMessage = posMessage || opts.message;
+
+    if (!targetChannel || !targetMessage) {
+      console.error('\n❌ Error: Channel and Message are required.');
+      console.error('   Usage: npm run cli -- send <channel> "<message>"');
+      console.error('   Or:    npm run cli -- send -c <channel> -m "<message>"\n');
+      process.exit(1);
+    }
+
     const service = getService();
     try {
       const result = await service.sendMessage({
-        channel: opts.channel,
-        message: opts.message,
+        channel: targetChannel,
+        message: targetMessage,
         rootId: opts.rootId,
         teamId: opts.team,
         idempotencyKey: opts.idempotencyKey,
@@ -146,20 +166,31 @@ program
 
 // reply
 program
-  .command('reply')
-  .description('Reply to a message thread in a channel')
-  .requiredOption('-c, --channel <channel>', 'Channel name, slug, or ID')
-  .requiredOption('-r, --root-id <rootId>', 'Root thread ID to reply to')
-  .requiredOption('-m, --message <message>', 'Message body to send')
+  .command('reply [channel] [rootId] [message]')
+  .description('Reply to a message thread in a channel (e.g. `mattermost reply per-fe-an <rootId> "Reply text"`)')
+  .option('-c, --channel <channel>', 'Channel name, slug, or ID')
+  .option('-r, --root-id <rootId>', 'Root thread ID to reply to')
+  .option('-m, --message <message>', 'Message body to send')
   .option('--team <teamId>', 'Team ID or slug')
   .option('--idempotency-key <key>', 'Custom idempotency key')
-  .action(async (opts) => {
+  .action(async (posChannel, posRootId, posMessage, opts) => {
+    const targetChannel = posChannel || opts.channel;
+    const targetRootId = posRootId || opts.rootId;
+    const targetMessage = posMessage || opts.message;
+
+    if (!targetChannel || !targetRootId || !targetMessage) {
+      console.error('\n❌ Error: Channel, Root ID, and Message are required.');
+      console.error('   Usage: npm run cli -- reply <channel> <rootId> "<message>"');
+      console.error('   Or:    npm run cli -- reply -c <channel> -r <rootId> -m "<message>"\n');
+      process.exit(1);
+    }
+
     const service = getService();
     try {
       const result = await service.replyToMessage({
-        channel: opts.channel,
-        rootId: opts.rootId,
-        message: opts.message,
+        channel: targetChannel,
+        rootId: targetRootId,
+        message: targetMessage,
         teamId: opts.team,
         idempotencyKey: opts.idempotencyKey,
       });
@@ -275,6 +306,47 @@ program
     }
   });
 
+// enable
+program
+  .command('enable <channel>')
+  .description('Enable a channel in channels.yml (allow sending messages)')
+  .action(async (channel) => {
+    const service = getService();
+    try {
+      const ok = service.toggleChannel(channel, true);
+      if (ok) {
+        console.log(`\n🟢 Channel '${channel}' is now [ENABLED] in channels.yml\n`);
+      } else {
+        console.log(`\n❌ Channel '${channel}' was not found in channels.yml.`);
+        console.log(`💡 Run 'npm run cli -- sync' to auto-discover channels first.\n`);
+      }
+    } catch (err) {
+      handleError(err);
+    } finally {
+      await service.close();
+    }
+  });
+
+// disable
+program
+  .command('disable <channel>')
+  .description('Disable a channel in channels.yml (prevent sending messages)')
+  .action(async (channel) => {
+    const service = getService();
+    try {
+      const ok = service.toggleChannel(channel, false);
+      if (ok) {
+        console.log(`\n⚪ Channel '${channel}' is now [DISABLED] in channels.yml\n`);
+      } else {
+        console.log(`\n❌ Channel '${channel}' was not found in channels.yml.\n`);
+      }
+    } catch (err) {
+      handleError(err);
+    } finally {
+      await service.close();
+    }
+  });
+
 // sync / discover
 program
   .command('sync')
@@ -297,17 +369,17 @@ program
         handleOutput(result, true);
       } else {
         console.log(`\n✅ Channels Synchronized Successfully!`);
-        console.log(`   File:      ${result.filePath}`);
+        console.log(`   File:       ${result.filePath}`);
         console.log(`   Discovered: ${result.totalDiscovered} channels across ${result.totalTeams} team(s)`);
-        console.log(`   Status:    ${result.enabledCount} enabled, ${result.disabledCount} disabled\n`);
+        console.log(`   Status:     ${result.enabledCount} enabled, ${result.disabledCount} disabled\n`);
         console.log('-------------------------------------------------------------');
         for (const m of result.mappings) {
           const statusIcon = m.enabled ? '🟢 [ENABLED] ' : '⚪ [DISABLED]';
           const teamInfo = m.team ? ` (team: ${m.team})` : '';
-          console.log(`   ${statusIcon} ${m.alias.padEnd(20)} ➔ #${m.channel}${teamInfo}`);
+          console.log(`   ${statusIcon} ${m.alias.padEnd(25)} ➔ #${m.channel}${teamInfo}`);
         }
         console.log('-------------------------------------------------------------');
-        console.log(`💡 You can now easily toggle 'enabled: true/false' in '${result.filePath}'.\n`);
+        console.log(`💡 You can now easily toggle 'enabled: true/false' or use 'mattermost enable/disable <channel>'.\n`);
       }
     } catch (err) {
       handleError(err);
@@ -340,12 +412,14 @@ program
     }
   });
 
-// aliases
+// channels / aliases / list
 program
-  .command('aliases')
+  .command('channels [query]')
+  .alias('aliases')
+  .alias('list')
   .alias('channels-map')
-  .description('List all channel aliases configured in YAML mapping')
-  .action(async () => {
+  .description('List and search configured channels in channels.yml')
+  .action(async (query) => {
     try {
       const globalOpts = program.opts();
       const configLoader = new ChannelConfigLoader({
@@ -353,28 +427,44 @@ program
         envName: globalOpts.env || process.env.MATTERMOST_ENV,
       });
 
-      const aliases = configLoader.getAllMappings();
+      let aliases = configLoader.getAllMappings();
+      if (query) {
+        const q = query.toLowerCase();
+        aliases = aliases.filter(
+          (a) =>
+            a.alias.toLowerCase().includes(q) ||
+            a.channel.toLowerCase().includes(q) ||
+            (a.displayName && a.displayName.toLowerCase().includes(q)) ||
+            (a.description && a.description.toLowerCase().includes(q))
+        );
+      }
+
       if (program.opts().json) {
         handleOutput(aliases, true);
       } else {
-        console.log(`\n📋 Configured Channel Aliases (${aliases.length} aliases):`);
+        const total = configLoader.getAllMappings().length;
+        console.log(`\n📋 Mattermost Channels (${aliases.length} of ${total} channels${query ? ` matching '${query}'` : ''}):`);
         if (configLoader.getDefaultTeam()) {
-          console.log(`   Default Team: ${configLoader.getDefaultTeam()}`);
+          console.log(`   Default Team:     ${configLoader.getDefaultTeam()}`);
         }
         if (configLoader.getFallbackChannel()) {
           console.log(`   Fallback Channel: #${configLoader.getFallbackChannel()}`);
         }
-        console.log('-------------------------------------------------------------');
+        console.log('-------------------------------------------------------------------------------');
         if (aliases.length === 0) {
-          console.log('   No aliases loaded. Create channels.yml to define friendly aliases.');
+          console.log('   No matching channels found. Run `mattermost sync` to fetch channels.');
         } else {
           for (const a of aliases) {
-            const teamInfo = a.team ? ` (team: ${a.team})` : '';
-            const desc = a.description ? ` - ${a.description}` : '';
-            console.log(`   • ${a.alias.padEnd(16)} ➔ #${a.channel}${teamInfo}${desc}`);
+            const status = a.enabled ? '🟢' : '⚪';
+            const team = a.team ? `[team: ${a.team.slice(0, 8)}]` : '';
+            const desc = a.description ? ` - ${a.description.split('\n')[0].slice(0, 45)}` : '';
+            console.log(`   ${status} ${a.alias.padEnd(28)} ➔ #${a.channel.padEnd(28)} ${team}${desc}`);
           }
         }
-        console.log('-------------------------------------------------------------\n');
+        console.log('-------------------------------------------------------------------------------');
+        console.log('💡 Quick Commands:');
+        console.log('   • Send:    npm run cli -- send <channel> "<message>"');
+        console.log('   • Toggle:  npm run cli -- enable <channel>  |  npm run cli -- disable <channel>\n');
       }
     } catch (err) {
       handleError(err);

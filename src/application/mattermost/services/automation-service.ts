@@ -173,6 +173,13 @@ export class MattermostAutomationService {
   }
 
   /**
+   * Enables or disables a channel in channels.yml.
+   */
+  public toggleChannel(alias: string, enabled: boolean): boolean {
+    return this.channelResolver.toggleChannel(alias, enabled);
+  }
+
+  /**
    * Reads recent messages from a channel.
    */
   public async readChannel(params: {
