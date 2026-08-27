@@ -20,6 +20,7 @@
   },
   "scripts": {
     "build": "tsc",
+    "agent": "tsx src/agent.ts",
     "cli": "tsx src/cli/index.ts",
     "ui": "tsx src/ui/index.ts",
     "server": "tsx src/ui/index.ts",

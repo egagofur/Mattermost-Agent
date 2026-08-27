@@ -721,4 +721,21 @@ program
     }
   });
 
+// agent / listener command
+program
+  .command('agent')
+  .alias('listen')
+  .description('Start the Mattermost AI Agent listener with @mention self-triggering')
+  .option('-u, --username <username>', 'Target @username trigger identity')
+  .option('-i, --interval <seconds>', 'Polling interval in seconds', '5')
+  .action(async (opts) => {
+    try {
+      const { runAgent } = await import('../agent');
+      await runAgent();
+    } catch (err) {
+      handleError(err);
+    }
+  });
+
 program.parse(process.argv);
+

@@ -357,6 +357,97 @@ JSON Response:
 
 ---
 
+## 🤖 Mattermost AI Agent (Self-Triggering Personal Account)
+
+A lightweight listener service that allows an AI agent to be triggered directly inside Mattermost by mentioning a configured `@username`.
+
+### 🌟 Key Design Invariants
+
+1. **Personal Account Identity**: The agent uses the **same** Mattermost account as the human user (via Personal Access Token).
+2. **Intentional Self-Triggering**: A message authored by the human account owner (e.g. `@ega explain event-driven architecture`) **MUST trigger** the agent. Messages from the authenticated user are never automatically ignored.
+3. **Agent Self-Loop Prevention**: To prevent infinite agent loops (where the agent responds to its own generated posts), the agent explicitly records every `post_id` it creates in local state (`agent_generated_post_ids`) and ignores those posts on subsequent polls.
+
+```text
+Mattermost Channel
+       │
+       ▼ (Poll Loop every N seconds)
+Fetch Recent Posts
+       │
+       ▼
+Check Post State ──── [ID in agent_generated_post_ids?] ──► IGNORE (Prevent Self-Loop)
+       │          ──── [ID in processed_post_ids?]       ──► IGNORE (Prevent Duplicates)
+       ▼
+Detect @username Mention? ─── (No) ──► Skip
+       │ (Yes - Matches @username boundary)
+       ▼
+Mark Post as Processed
+       │
+       ▼
+Extract Instruction (strips triggering @username mention only)
+       │
+       ▼
+Retrieve Thread Context (if in thread, fetches recent messages)
+       │
+       ▼
+Call AI Provider (generate response)
+       │
+       ▼
+Post Response to Mattermost (replies to thread with authenticated user)
+       │
+       ▼
+Store Generated Post ID in agent_generated_post_ids
+       │
+       ▼
+Save Local State (data/agent-state.json)
+```
+
+### ⚙️ Configuration (.env)
+
+```bash
+# Mattermost Base URL & Personal Access Token
+MATTERMOST_URL=https://mattermost.example.com
+MATTERMOST_TOKEN=your_personal_access_token_here
+
+# Trigger username without @ (e.g. ega -> triggers on `@ega ...`)
+MATTERMOST_USERNAME=ega
+
+# Polling Interval in seconds (Default: 5)
+MATTERMOST_POLL_INTERVAL=5
+
+# AI Provider: openai, gemini, or mock (Default: mock)
+AI_PROVIDER=openai
+OPENAI_API_KEY=your_openai_api_key_here
+# GEMINI_API_KEY=your_gemini_api_key_here
+
+# Local state file
+STATE_FILE_PATH=./data/agent-state.json
+```
+
+### 🚀 Running the AI Agent
+
+```bash
+# Start the AI Agent listener:
+npm run agent
+
+# Or via CLI:
+mattermost agent --username ega --interval 5
+```
+
+### 🧪 Example Interactions
+
+* **Direct Question**:
+  > **Ega**: `@ega what is the difference between CQRS and Event Sourcing?`
+  > 
+  > **Ega (AI Agent)**: `CQRS separates read and write models, while Event Sourcing stores state as a sequence of events...`
+* **Thread Context**:
+  > **Alice**: `Our Redis cache is hitting memory limits.`
+  > 
+  > **Ega**: `@ega how should we optimize this cache?`
+  > 
+  > **Ega (AI Agent)**: `Based on the thread discussion regarding Redis memory limits, you can implement an LRU eviction policy...`
+
+---
+
 ## 🌐 Web Dashboard & REST API Gateway
 
 `mattermost-agent` includes a high-density, interactive **Web Dashboard** and **REST API Gateway** for direct developer integrations.
