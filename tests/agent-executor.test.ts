@@ -67,4 +67,26 @@ describe('AgentTask & MockAgentExecutor', () => {
     expect(result.message).toBe('Custom result for: BUILD FEATURE');
     expect(result.metadata?.custom).toBe(true);
   });
+
+  it('HermesAgentExecutor initializes with correct options and handles execution failure gracefully', async () => {
+    const { HermesAgentExecutor } = await import('../src/agent/hermes-executor');
+    const hermesExecutor = new HermesAgentExecutor({
+      cliPath: 'non-existent-hermes-binary-xyz',
+      timeoutMs: 500,
+    });
+
+    const task = createAgentTask({
+      instruction: 'test failure fallback',
+      channelId: 'chan_1',
+      rootPostId: 'root_1',
+      sourcePostId: 'src_1',
+      requestedBy: '@ega',
+    });
+
+    const result = await hermesExecutor.execute(task);
+    expect(result.success).toBe(false);
+    expect(result.message).toBe("I couldn't complete that request.");
+    expect(result.metadata?.error).toBeDefined();
+  });
 });
+

@@ -1,18 +1,25 @@
 import { loadAgentConfig, sanitizeAgentConfig } from './config/agent-config';
 import { MattermostClient } from './mattermost/client';
 import { AgentStateManager } from './state/state-manager';
-import { AgentExecutor, MockAgentExecutor } from './agent/executor';
+import { AgentExecutor, MockAgentExecutor, HermesAgentExecutor } from './agent/executor';
 import { MattermostAgentListener } from './mattermost/listener';
 import { createAIProvider } from './ai/provider';
 
 /**
- * Creates the appropriate task executor.
- *
- * 🔌 EXTENSION POINT FOR FUTURE HERMES INTEGRATION:
- * When Hermes is developed, replace or extend this factory to return `new HermesAgentExecutor(...)`.
- * The Mattermost listener layer remains completely decoupled and untouched.
+ * Creates the appropriate task executor based on configuration.
  */
 export function createDefaultExecutor(config: ReturnType<typeof loadAgentConfig>): AgentExecutor {
+  if (config.AI_PROVIDER === 'hermes') {
+    return new HermesAgentExecutor({
+      cliPath: config.HERMES_CLI_PATH,
+      invocationMode: config.HERMES_INVOCATION_MODE,
+      containerName: config.HERMES_CONTAINER_NAME,
+      apiUrl: config.HERMES_API_URL,
+      model: config.HERMES_MODEL,
+      yolo: config.HERMES_YOLO,
+    });
+  }
+
   if (config.AI_PROVIDER === 'openai' || config.AI_PROVIDER === 'gemini') {
     const aiProvider = createAIProvider(config.AI_PROVIDER, config.AI_API_KEY || config.OPENAI_API_KEY || config.GEMINI_API_KEY);
     return {
@@ -23,7 +30,7 @@ export function createDefaultExecutor(config: ReturnType<typeof loadAgentConfig>
     };
   }
 
-  // Default: MockAgentExecutor for local dev, MVP, and Hermes testing
+  // Default: MockAgentExecutor for local dev & testing
   return new MockAgentExecutor();
 }
 

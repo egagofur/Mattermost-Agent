@@ -42,8 +42,15 @@ export const AgentConfigSchema = z.object({
     }),
 
   AI_PROVIDER: z
-    .enum(['openai', 'gemini', 'mock'])
-    .default('mock'),
+    .enum(['hermes', 'openai', 'gemini', 'mock'])
+    .default('hermes'),
+
+  HERMES_CLI_PATH: z.string().optional().default('hermes'),
+  HERMES_INVOCATION_MODE: z.enum(['cli', 'docker', 'http']).default('cli'),
+  HERMES_CONTAINER_NAME: z.string().default('hermes-agent'),
+  HERMES_API_URL: z.string().default('http://localhost:8000'),
+  HERMES_MODEL: z.string().optional(),
+  HERMES_YOLO: z.boolean().default(true),
 
   AI_API_KEY: z.string().optional(),
   OPENAI_API_KEY: z.string().optional(),
@@ -73,6 +80,12 @@ export function loadAgentConfig(overrides?: Partial<Record<string, string | numb
     MATTERMOST_USERNAME: process.env.MATTERMOST_USERNAME,
     MATTERMOST_POLL_INTERVAL: process.env.MATTERMOST_POLL_INTERVAL,
     AI_PROVIDER: process.env.AI_PROVIDER,
+    HERMES_CLI_PATH: process.env.HERMES_CLI_PATH,
+    HERMES_INVOCATION_MODE: process.env.HERMES_INVOCATION_MODE,
+    HERMES_CONTAINER_NAME: process.env.HERMES_CONTAINER_NAME,
+    HERMES_API_URL: process.env.HERMES_API_URL,
+    HERMES_MODEL: process.env.HERMES_MODEL,
+    HERMES_YOLO: process.env.HERMES_YOLO !== undefined ? process.env.HERMES_YOLO === 'true' || process.env.HERMES_YOLO === '1' : undefined,
     AI_API_KEY: process.env.AI_API_KEY || process.env.OPENAI_API_KEY || process.env.GEMINI_API_KEY,
     OPENAI_API_KEY: process.env.OPENAI_API_KEY,
     GEMINI_API_KEY: process.env.GEMINI_API_KEY,

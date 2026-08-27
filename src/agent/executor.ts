@@ -40,3 +40,7 @@ export class MockAgentExecutor implements AgentExecutor {
     };
   }
 }
+
+export { HermesAgentExecutor } from './hermes-executor';
+export type { HermesExecutorOptions } from './hermes-executor';
+
