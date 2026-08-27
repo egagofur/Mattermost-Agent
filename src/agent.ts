@@ -1,12 +1,35 @@
 import { loadAgentConfig, sanitizeAgentConfig } from './config/agent-config';
 import { MattermostClient } from './mattermost/client';
 import { AgentStateManager } from './state/state-manager';
-import { createAIProvider } from './ai/provider';
+import { AgentExecutor, MockAgentExecutor } from './agent/executor';
 import { MattermostAgentListener } from './mattermost/listener';
+import { createAIProvider } from './ai/provider';
 
-export async function runAgent(): Promise<MattermostAgentListener> {
+/**
+ * Creates the appropriate task executor.
+ *
+ * 🔌 EXTENSION POINT FOR FUTURE HERMES INTEGRATION:
+ * When Hermes is developed, replace or extend this factory to return `new HermesAgentExecutor(...)`.
+ * The Mattermost listener layer remains completely decoupled and untouched.
+ */
+export function createDefaultExecutor(config: ReturnType<typeof loadAgentConfig>): AgentExecutor {
+  if (config.AI_PROVIDER === 'openai' || config.AI_PROVIDER === 'gemini') {
+    const aiProvider = createAIProvider(config.AI_PROVIDER, config.AI_API_KEY || config.OPENAI_API_KEY || config.GEMINI_API_KEY);
+    return {
+      execute: async (task) => {
+        const response = await aiProvider.generate(task.instruction, task.threadContext);
+        return { success: true, message: response };
+      },
+    };
+  }
+
+  // Default: MockAgentExecutor for local dev, MVP, and Hermes testing
+  return new MockAgentExecutor();
+}
+
+export async function runAgent(customExecutor?: AgentExecutor): Promise<MattermostAgentListener> {
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-  console.log('🤖 Starting Mattermost AI Agent (Self-Triggering Personal Account)');
+  console.log('🤖 Starting Mattermost Agent (Interface & Integration Layer)');
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
   // 1. Load configuration (fails fast if missing required env vars)
@@ -24,14 +47,14 @@ export async function runAgent(): Promise<MattermostAgentListener> {
     filePath: config.STATE_FILE_PATH,
   });
 
-  // 4. Initialize AI Provider
-  const aiProvider = createAIProvider(config.AI_PROVIDER, config.AI_API_KEY || config.OPENAI_API_KEY || config.GEMINI_API_KEY);
+  // 4. Initialize Task Executor (MockAgentExecutor by default, ready for Hermes)
+  const executor = customExecutor || createDefaultExecutor(config);
 
   // 5. Initialize Listener
   const listener = new MattermostAgentListener({
     client,
     stateManager,
-    aiProvider,
+    executor,
     username: config.MATTERMOST_USERNAME,
     pollIntervalSeconds: config.MATTERMOST_POLL_INTERVAL,
   });
@@ -45,7 +68,7 @@ export async function runAgent(): Promise<MattermostAgentListener> {
     console.log('\n[INFO] Graceful shutdown requested...');
     listener.stop();
     stateManager.save();
-    console.log('[INFO] Mattermost AI Agent stopped.');
+    console.log('[INFO] Mattermost Agent stopped.');
     process.exit(0);
   };
 

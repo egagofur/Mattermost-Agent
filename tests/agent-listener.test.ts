@@ -2,15 +2,16 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { MattermostAgentListener } from '../src/mattermost/listener';
 import { MattermostClient, MattermostPost, MattermostUser } from '../src/mattermost/client';
 import { AgentStateManager } from '../src/state/state-manager';
-import { MockAIProvider } from '../src/ai/provider';
+import { MockAgentExecutor } from '../src/agent/executor';
+import { AgentTask } from '../src/agent/task';
 
-describe('MattermostAgentListener', () => {
+describe('MattermostAgentListener (Integration & Executor Layer)', () => {
   const currentUserId = 'usr_ega_authenticated_123';
   const username = 'ega';
 
   let mockClient: MattermostClient;
   let stateManager: AgentStateManager;
-  let mockAI: MockAIProvider;
+  let mockExecutor: MockAgentExecutor;
   let listener: MattermostAgentListener;
 
   let createdPosts: Array<{ channel_id: string; message: string; root_id?: string; id: string }> = [];
@@ -48,14 +49,17 @@ describe('MattermostAgentListener', () => {
       }),
     } as unknown as MattermostClient;
 
-    mockAI = new MockAIProvider(async (prompt) => {
-      return `AI explanation for: ${prompt}`;
+    mockExecutor = new MockAgentExecutor(async (task) => {
+      return {
+        success: true,
+        message: `Executor response: ${task.instruction}`,
+      };
     });
 
     listener = new MattermostAgentListener({
       client: mockClient,
       stateManager,
-      aiProvider: mockAI,
+      executor: mockExecutor,
       username,
       pollIntervalSeconds: 5,
     });
@@ -78,7 +82,7 @@ describe('MattermostAgentListener', () => {
     expect(handled).toBe(true);
     expect(mockClient.createPost).toHaveBeenCalledTimes(1);
     expect(createdPosts.length).toBe(1);
-    expect(createdPosts[0].message).toBe('AI explanation for: explain CQRS pattern');
+    expect(createdPosts[0].message).toBe('Executor response: explain CQRS pattern');
     expect(createdPosts[0].root_id).toBe('post_human_self_1'); // Replied to root
     expect(stateManager.isProcessed('post_human_self_1')).toBe(true);
   });
@@ -110,7 +114,7 @@ describe('MattermostAgentListener', () => {
       user_id: currentUserId, // Agent uses same user_id as human
       channel_id: 'chan_general_1',
       root_id: 'post_trigger_1',
-      message: 'AI explanation for: what is event sourcing? Mentioning @ega for reference.',
+      message: 'Executor response: what is event sourcing? Mentioning @ega for reference.',
     };
 
     const handledSecondTime = await listener.handlePost(agentPostSeenByPoller);
@@ -186,19 +190,19 @@ describe('MattermostAgentListener', () => {
     expect(createdPosts[1].root_id).toBe('root_post_100');
   });
 
-  it('retrieves thread context and passes it to the AI provider', async () => {
+  it('creates AgentTask with thread context and passes it to AgentExecutor', async () => {
     await listener.initialize();
 
-    let receivedContext: any = null;
-    mockAI = new MockAIProvider(async (prompt, context) => {
-      receivedContext = context;
-      return 'Thread reply response';
+    let receivedTask: AgentTask | null = null;
+    mockExecutor = new MockAgentExecutor(async (task) => {
+      receivedTask = task;
+      return { success: true, message: 'Thread reply response' };
     });
 
     listener = new MattermostAgentListener({
       client: mockClient,
       stateManager,
-      aiProvider: mockAI,
+      executor: mockExecutor,
       username,
     });
     await listener.initialize();
@@ -237,23 +241,26 @@ describe('MattermostAgentListener', () => {
 
     await listener.handlePost(threadPost);
 
-    expect(receivedContext).not.toBeNull();
-    expect(receivedContext.length).toBe(2);
-    expect(receivedContext[0].message).toBe('Alice: We are planning our Q3 sprint.');
-    expect(receivedContext[1].message).toBe('Bob: Make sure to include Redis caching.');
+    expect(receivedTask).not.toBeNull();
+    expect(receivedTask!.instruction).toBe('summarize the plan');
+    expect(receivedTask!.channelId).toBe('chan_general_1');
+    expect(receivedTask!.rootPostId).toBe('post_thread_msg_1');
+    expect(receivedTask!.threadContext.length).toBe(2);
+    expect(receivedTask!.threadContext[0].message).toBe('Alice: We are planning our Q3 sprint.');
+    expect(receivedTask!.threadContext[1].message).toBe('Bob: Make sure to include Redis caching.');
   });
 
-  it('gracefully handles AI provider failure with concise fallback message', async () => {
+  it('gracefully handles executor failure with fallback message', async () => {
     await listener.initialize();
 
-    const failingAI = new MockAIProvider(async () => {
-      throw new Error('API Rate Limit Exceeded');
+    const failingExecutor = new MockAgentExecutor(async () => {
+      throw new Error('Executor execution crash');
     });
 
     listener = new MattermostAgentListener({
       client: mockClient,
       stateManager,
-      aiProvider: failingAI,
+      executor: failingExecutor,
       username,
     });
     await listener.initialize();
@@ -270,6 +277,6 @@ describe('MattermostAgentListener', () => {
     await listener.handlePost(triggerPost);
 
     expect(createdPosts.length).toBe(1);
-    expect(createdPosts[0].message).toBe('Unable to process this request right now.');
+    expect(createdPosts[0].message).toBe("I couldn't complete that request.");
   });
 });

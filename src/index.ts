@@ -56,7 +56,7 @@ export { createMattermostMcpServer, runStdioMcpServer } from './mcp/server';
 export { MattermostHttpServer, startMattermostHttpServer } from './ui/server';
 export type { HttpServerOptions } from './ui/server';
 
-// Mattermost AI Agent (Self-Triggering Personal Account MVP)
+// Mattermost Agent & Task Executor Layer (Hermes-Ready Architecture)
 export { MattermostClient } from './mattermost/client';
 export type { MattermostClientOptions, MattermostPost, MattermostUser, MattermostChannel } from './mattermost/client';
 export { MattermostAgentListener } from './mattermost/listener';
@@ -64,9 +64,14 @@ export type { ListenerOptions } from './mattermost/listener';
 export { hasMention, extractInstruction, createMentionRegex } from './mattermost/mentions';
 export { AgentStateManager } from './state/state-manager';
 export type { AgentStateData, StateManagerOptions } from './state/state-manager';
+export { createAgentTask } from './agent/task';
+export type { AgentTask, ThreadMessage, CreateAgentTaskParams } from './agent/task';
+export { MockAgentExecutor } from './agent/executor';
+export type { AgentExecutor, AgentResult, MockExecuteHandler } from './agent/executor';
 export { OpenAIProvider, GeminiProvider, MockAIProvider, createAIProvider } from './ai/provider';
 export type { AIProvider, ThreadContextMessage } from './ai/provider';
 export { loadAgentConfig, sanitizeAgentConfig } from './config/agent-config';
 export type { AgentConfig } from './config/agent-config';
-export { runAgent } from './agent';
+export { runAgent, createDefaultExecutor } from './agent';
+
 

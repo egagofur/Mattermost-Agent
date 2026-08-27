@@ -357,54 +357,129 @@ JSON Response:
 
 ---
 
-## 🤖 Mattermost AI Agent (Self-Triggering Personal Account)
+## 🤖 Mattermost Agent & Task Executor Layer (Hermes-Ready Architecture)
 
-A lightweight listener service that allows an AI agent to be triggered directly inside Mattermost by mentioning a configured `@username`.
+A modular Mattermost integration layer that allows an AI agent to be triggered by mentioning a configured `@username`.
+
+Mattermost acts as the communication interface, while task execution is decoupled behind a clean `AgentExecutor` abstraction. This enables **MockAgentExecutor** for development/testing today, with a direct plug-in point for **Hermes** later.
+
+```text
+Mattermost (Personal Account @ega)
+       │
+       ▼ (Poll Loop every N seconds)
+Mattermost Listener
+       │
+       ▼
+Mention Detection (checks @username boundary)
+       │
+       ▼
+Thread Context Formatter (recent messages in thread)
+       │
+       ▼
+AgentTask (Normalized Task Object)
+       │
+       ▼
+AgentExecutor (Interface)
+   ├── MockAgentExecutor (Now - for dev/testing)
+   └── HermesAgentExecutor (Later - plugged in cleanly)
+       │
+       ▼
+AgentResult (success, message, metadata)
+       │
+       ▼
+Mattermost Reply (anchored to rootPostId in same thread)
+       │
+       ▼
+Track Generated Post ID in State (Prevent Self-Loop)
+```
+
+---
 
 ### 🌟 Key Design Invariants
 
 1. **Personal Account Identity**: The agent uses the **same** Mattermost account as the human user (via Personal Access Token).
 2. **Intentional Self-Triggering**: A message authored by the human account owner (e.g. `@ega explain event-driven architecture`) **MUST trigger** the agent. Messages from the authenticated user are never automatically ignored.
 3. **Agent Self-Loop Prevention**: To prevent infinite agent loops (where the agent responds to its own generated posts), the agent explicitly records every `post_id` it creates in local state (`agent_generated_post_ids`) and ignores those posts on subsequent polls.
+4. **Decoupled Task Boundary (`AgentTask`)**: The Mattermost listener does not know how Hermes works or what model it uses. It constructs an `AgentTask` and hands it to the executor.
 
-```text
-Mattermost Channel
-       │
-       ▼ (Poll Loop every N seconds)
-Fetch Recent Posts
-       │
-       ▼
-Check Post State ──── [ID in agent_generated_post_ids?] ──► IGNORE (Prevent Self-Loop)
-       │          ──── [ID in processed_post_ids?]       ──► IGNORE (Prevent Duplicates)
-       ▼
-Detect @username Mention? ─── (No) ──► Skip
-       │ (Yes - Matches @username boundary)
-       ▼
-Mark Post as Processed
-       │
-       ▼
-Extract Instruction (strips triggering @username mention only)
-       │
-       ▼
-Retrieve Thread Context (if in thread, fetches recent messages)
-       │
-       ▼
-Call AI Provider (generate response)
-       │
-       ▼
-Post Response to Mattermost (replies to thread with authenticated user)
-       │
-       ▼
-Store Generated Post ID in agent_generated_post_ids
-       │
-       ▼
-Save Local State (data/agent-state.json)
+---
+
+### 🧩 Domain Types & Interfaces
+
+#### 1. `AgentTask`
+```typescript
+export interface ThreadMessage {
+  author: string;
+  message: string;
+  timestamp?: number;
+  userId?: string;
+}
+
+export interface AgentTask {
+  id: string;
+  instruction: string;
+  threadContext: ThreadMessage[];
+  channelId: string;
+  rootPostId: string;
+  sourcePostId: string;
+  requestedBy: string;
+  createdAt: string;
+}
 ```
+
+#### 2. `AgentExecutor` & `AgentResult`
+```typescript
+export interface AgentResult {
+  success: boolean;
+  message: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface AgentExecutor {
+  execute(task: AgentTask): Promise<AgentResult>;
+}
+```
+
+#### 3. `MockAgentExecutor` (Development & Testing)
+```typescript
+export class MockAgentExecutor implements AgentExecutor {
+  async execute(task: AgentTask): Promise<AgentResult> {
+    return {
+      success: true,
+      message: `Mock executor response: ${task.instruction}`,
+    };
+  }
+}
+```
+
+---
+
+### 🔌 Future Hermes Integration Point
+
+When Hermes is ready, create `HermesAgentExecutor` implementing `AgentExecutor`:
+
+```typescript
+// Example future Hermes adapter:
+export class HermesAgentExecutor implements AgentExecutor {
+  async execute(task: AgentTask): Promise<AgentResult> {
+    // Invoke Hermes CLI/API with task.instruction and task.threadContext
+    const result = await hermesClient.run(task);
+    return {
+      success: true,
+      message: result.output,
+    };
+  }
+}
+```
+
+Then plug it into `createDefaultExecutor()` in `src/agent.ts` or pass it into `runAgent(new HermesAgentExecutor())`. The Mattermost listener and mention detection logic remain 100% untouched.
+
+---
 
 ### ⚙️ Configuration (.env)
 
 ```bash
-# Mattermost Base URL & Personal Access Token
+# Mattermost Server URL & Personal Access Token
 MATTERMOST_URL=https://mattermost.example.com
 MATTERMOST_TOKEN=your_personal_access_token_here
 
@@ -415,36 +490,33 @@ MATTERMOST_USERNAME=ega
 MATTERMOST_POLL_INTERVAL=5
 
 # AI Provider: openai, gemini, or mock (Default: mock)
-AI_PROVIDER=openai
-OPENAI_API_KEY=your_openai_api_key_here
+AI_PROVIDER=mock
+# OPENAI_API_KEY=your_openai_api_key_here
 # GEMINI_API_KEY=your_gemini_api_key_here
 
 # Local state file
 STATE_FILE_PATH=./data/agent-state.json
 ```
 
-### 🚀 Running the AI Agent
+### 🚀 Running the Agent
 
 ```bash
-# Start the AI Agent listener:
+# Start the Agent listener:
 npm run agent
 
 # Or via CLI:
 mattermost agent --username ega --interval 5
 ```
 
-### 🧪 Example Interactions
+### 🧪 Running Tests
 
-* **Direct Question**:
-  > **Ega**: `@ega what is the difference between CQRS and Event Sourcing?`
-  > 
-  > **Ega (AI Agent)**: `CQRS separates read and write models, while Event Sourcing stores state as a sequence of events...`
-* **Thread Context**:
-  > **Alice**: `Our Redis cache is hitting memory limits.`
-  > 
-  > **Ega**: `@ega how should we optimize this cache?`
-  > 
-  > **Ega (AI Agent)**: `Based on the thread discussion regarding Redis memory limits, you can implement an LRU eviction policy...`
+```bash
+# Run all unit tests:
+npm test
+
+# Run tests in watch mode:
+npm run test:watch
+```
 
 ---
 
