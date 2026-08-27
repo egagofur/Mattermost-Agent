@@ -4,6 +4,7 @@ import { AgentStateManager } from './state/state-manager';
 import { AgentExecutor, MockAgentExecutor, HermesAgentExecutor } from './agent/executor';
 import { MattermostAgentListener } from './mattermost/listener';
 import { createAIProvider } from './ai/provider';
+import { resolveAuthSession } from './mattermost/session-helper';
 
 /**
  * Creates the appropriate task executor based on configuration.
@@ -15,7 +16,8 @@ export function createDefaultExecutor(config: ReturnType<typeof loadAgentConfig>
       invocationMode: config.HERMES_INVOCATION_MODE,
       containerName: config.HERMES_CONTAINER_NAME,
       apiUrl: config.HERMES_API_URL,
-      profile: config.HERMES_PROFILE,
+      model: config.HERMES_MODEL,
+      yolo: config.HERMES_YOLO,
     });
   }
 
@@ -38,14 +40,24 @@ export async function runAgent(customExecutor?: AgentExecutor): Promise<Mattermo
   console.log('🤖 Starting Mattermost Agent (Interface & Integration Layer)');
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
-  // 1. Load configuration (fails fast if missing required env vars)
+  // 1. Load configuration
   const config = loadAgentConfig();
   console.log('[INFO] Loaded configuration:', sanitizeAgentConfig(config));
 
-  // 2. Initialize Mattermost REST Client
+  // 2. Automatically resolve authentication (from MATTERMOST_TOKEN or browser session)
+  const authSession = await resolveAuthSession({
+    explicitToken: config.MATTERMOST_TOKEN,
+    profileDir: config.MATTERMOST_BROWSER_PROFILE_DIR,
+  });
+
+  if (authSession.source === 'browser_session') {
+    console.log('[INFO] Using active session token from Playwright browser profile.');
+  }
+
+  // 3. Initialize Mattermost REST Client
   const client = new MattermostClient({
     baseUrl: config.MATTERMOST_URL,
-    token: config.MATTERMOST_TOKEN,
+    token: authSession.token,
   });
 
   // 3. Initialize Local State Manager

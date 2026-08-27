@@ -22,7 +22,6 @@ describe('Agent Configuration & Validation', () => {
     expect(() => {
       loadAgentConfig({
         MATTERMOST_URL: '',
-        MATTERMOST_TOKEN: '',
         MATTERMOST_USERNAME: '',
       });
     }).toThrow(/Invalid Mattermost Agent Configuration/);
@@ -52,5 +51,19 @@ describe('Agent Configuration & Validation', () => {
     expect(sanitized.MATTERMOST_TOKEN).toBe('[REDACTED]');
     expect(sanitized.MATTERMOST_URL).toBe('https://mattermost.example.com');
     expect(sanitized.MATTERMOST_USERNAME).toBe('@ega');
+  });
+
+  it('resolveAuthSession returns explicit token if provided', async () => {
+    const { resolveAuthSession } = await import('../src/mattermost/session-helper');
+    const session = await resolveAuthSession({ explicitToken: 'my_custom_token' });
+    expect(session.token).toBe('my_custom_token');
+    expect(session.source).toBe('env_token');
+  });
+
+  it('resolveAuthSession throws clear message if neither token nor profile exists', async () => {
+    const { resolveAuthSession } = await import('../src/mattermost/session-helper');
+    await expect(
+      resolveAuthSession({ explicitToken: '', profileDir: './non-existent-profile-path-xyz' })
+    ).rejects.toThrow(/No active Mattermost session or token found/);
   });
 });

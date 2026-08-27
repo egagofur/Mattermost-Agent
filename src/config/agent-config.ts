@@ -24,8 +24,12 @@ export const AgentConfigSchema = z.object({
     .transform((url) => url.replace(/\/+$/, '')), // remove trailing slash
 
   MATTERMOST_TOKEN: z
-    .string({ required_error: 'MATTERMOST_TOKEN is required.' })
-    .min(1, 'MATTERMOST_TOKEN cannot be empty.'),
+    .string()
+    .optional(),
+
+  MATTERMOST_BROWSER_PROFILE_DIR: z
+    .string()
+    .default('./data/mattermost-browser'),
 
   MATTERMOST_USERNAME: z
     .string({ required_error: 'MATTERMOST_USERNAME is required.' })
@@ -49,8 +53,9 @@ export const AgentConfigSchema = z.object({
   HERMES_INVOCATION_MODE: z.enum(['cli', 'docker', 'http']).default('cli'),
   HERMES_CONTAINER_NAME: z.string().default('hermes-agent'),
   HERMES_API_URL: z.string().default('http://localhost:8000'),
-  HERMES_PROFILE: z.literal('mattermost-agent').default('mattermost-agent'),
-  HERMES_YOLO: z.literal(false).default(false),
+  HERMES_PROFILE: z.string().optional(),
+  HERMES_MODEL: z.string().optional(),
+  HERMES_YOLO: z.boolean().default(true),
 
   AI_API_KEY: z.string().optional(),
   OPENAI_API_KEY: z.string().optional(),
@@ -77,6 +82,7 @@ export function loadAgentConfig(overrides?: Partial<Record<string, string | numb
   const rawEnv = {
     MATTERMOST_URL: process.env.MATTERMOST_URL,
     MATTERMOST_TOKEN: process.env.MATTERMOST_TOKEN,
+    MATTERMOST_BROWSER_PROFILE_DIR: process.env.MATTERMOST_BROWSER_PROFILE_DIR,
     MATTERMOST_USERNAME: process.env.MATTERMOST_USERNAME,
     MATTERMOST_POLL_INTERVAL: process.env.MATTERMOST_POLL_INTERVAL,
     AI_PROVIDER: process.env.AI_PROVIDER,

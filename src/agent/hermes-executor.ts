@@ -8,7 +8,9 @@ export interface HermesExecutorOptions {
   invocationMode?: 'cli' | 'docker' | 'http';
   containerName?: string;
   apiUrl?: string;
-  profile?: 'mattermost-agent';
+  profile?: string;
+  model?: string;
+  yolo?: boolean;
   timeoutMs?: number;
 }
 
@@ -28,7 +30,9 @@ export class HermesAgentExecutor implements AgentExecutor {
   private invocationMode: 'cli' | 'docker' | 'http';
   private containerName: string;
   private apiUrl: string;
-  private profile: 'mattermost-agent';
+  private profile?: string;
+  private model?: string;
+  private yolo: boolean;
   private timeoutMs: number;
 
   constructor(options?: HermesExecutorOptions) {
@@ -42,7 +46,9 @@ export class HermesAgentExecutor implements AgentExecutor {
     this.invocationMode = options?.invocationMode || (process.env.HERMES_INVOCATION_MODE as any) || 'cli';
     this.containerName = options?.containerName || process.env.HERMES_CONTAINER_NAME || 'hermes-agent';
     this.apiUrl = (options?.apiUrl || process.env.HERMES_API_URL || 'http://localhost:8000').replace(/\/+$/, '');
-    this.profile = options?.profile || 'mattermost-agent';
+    this.profile = options?.profile;
+    this.model = options?.model || process.env.HERMES_MODEL;
+    this.yolo = options?.yolo !== undefined ? options.yolo : Boolean(process.env.HERMES_YOLO === 'true' || process.env.HERMES_YOLO === '1');
     this.timeoutMs = options?.timeoutMs || 120000; // 2 minutes max execution
   }
 
@@ -87,7 +93,19 @@ export class HermesAgentExecutor implements AgentExecutor {
    */
   private executeViaCli(prompt: string, taskId: string): Promise<AgentResult> {
     return new Promise((resolve, reject) => {
-      const args: string[] = ['-p', this.profile, '-z', prompt];
+      const args: string[] = [];
+
+      if (this.profile) {
+        args.push('-p', this.profile);
+      }
+      if (this.model) {
+        args.push('-m', this.model);
+      }
+      if (this.yolo) {
+        args.push('--yolo');
+      }
+
+      args.push('-z', prompt);
 
       const env = {
         ...process.env,
@@ -134,7 +152,19 @@ export class HermesAgentExecutor implements AgentExecutor {
    */
   private executeViaDocker(prompt: string, taskId: string): Promise<AgentResult> {
     return new Promise((resolve, reject) => {
-      const args: string[] = ['exec', '-i', this.containerName, 'hermes', '-p', this.profile, '-z', prompt];
+      const args: string[] = ['exec', '-i', this.containerName, 'hermes'];
+
+      if (this.profile) {
+        args.push('-p', this.profile);
+      }
+      if (this.model) {
+        args.push('-m', this.model);
+      }
+      if (this.yolo) {
+        args.push('--yolo');
+      }
+
+      args.push('-z', prompt);
 
       execFile(
         'docker',
