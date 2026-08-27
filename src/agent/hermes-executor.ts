@@ -8,8 +8,7 @@ export interface HermesExecutorOptions {
   invocationMode?: 'cli' | 'docker' | 'http';
   containerName?: string;
   apiUrl?: string;
-  model?: string;
-  yolo?: boolean;
+  profile?: 'mattermost-agent';
   timeoutMs?: number;
 }
 
@@ -29,8 +28,7 @@ export class HermesAgentExecutor implements AgentExecutor {
   private invocationMode: 'cli' | 'docker' | 'http';
   private containerName: string;
   private apiUrl: string;
-  private model?: string;
-  private yolo: boolean;
+  private profile: 'mattermost-agent';
   private timeoutMs: number;
 
   constructor(options?: HermesExecutorOptions) {
@@ -44,8 +42,7 @@ export class HermesAgentExecutor implements AgentExecutor {
     this.invocationMode = options?.invocationMode || (process.env.HERMES_INVOCATION_MODE as any) || 'cli';
     this.containerName = options?.containerName || process.env.HERMES_CONTAINER_NAME || 'hermes-agent';
     this.apiUrl = (options?.apiUrl || process.env.HERMES_API_URL || 'http://localhost:8000').replace(/\/+$/, '');
-    this.model = options?.model || process.env.HERMES_MODEL;
-    this.yolo = options?.yolo !== undefined ? options.yolo : true;
+    this.profile = options?.profile || 'mattermost-agent';
     this.timeoutMs = options?.timeoutMs || 120000; // 2 minutes max execution
   }
 
@@ -86,18 +83,11 @@ export class HermesAgentExecutor implements AgentExecutor {
   }
 
   /**
-   * Invokes Hermes via the local CLI in one-shot mode (`hermes -z <prompt>`).
+   * Invokes the dedicated executor profile in one-shot mode.
    */
   private executeViaCli(prompt: string, taskId: string): Promise<AgentResult> {
     return new Promise((resolve, reject) => {
-      const args: string[] = ['-z', prompt];
-
-      if (this.yolo) {
-        args.push('--yolo');
-      }
-      if (this.model) {
-        args.push('-m', this.model);
-      }
+      const args: string[] = ['-p', this.profile, '-z', prompt];
 
       const env = {
         ...process.env,
@@ -140,18 +130,11 @@ export class HermesAgentExecutor implements AgentExecutor {
   }
 
   /**
-   * Invokes Hermes via Docker (`docker exec -i <container> hermes -z <prompt>`).
+   * Invokes the dedicated executor profile via Docker.
    */
   private executeViaDocker(prompt: string, taskId: string): Promise<AgentResult> {
     return new Promise((resolve, reject) => {
-      const args: string[] = ['exec', '-i', this.containerName, 'hermes', '-z', prompt];
-
-      if (this.yolo) {
-        args.push('--yolo');
-      }
-      if (this.model) {
-        args.push('-m', this.model);
-      }
+      const args: string[] = ['exec', '-i', this.containerName, 'hermes', '-p', this.profile, '-z', prompt];
 
       execFile(
         'docker',
@@ -194,7 +177,7 @@ export class HermesAgentExecutor implements AgentExecutor {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         messages: [{ role: 'user', content: prompt }],
-        model: this.model || 'hermes',
+        model: this.profile,
       }),
     });
 

@@ -1,8 +1,15 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const { execFileMock } = vi.hoisted(() => ({ execFileMock: vi.fn() }));
+vi.mock('child_process', () => ({ execFile: execFileMock }));
 import { createAgentTask } from '../src/agent/task';
 import { MockAgentExecutor } from '../src/agent/executor';
 
 describe('AgentTask & MockAgentExecutor', () => {
+  afterEach(() => {
+    execFileMock.mockReset();
+  });
+
   it('creates a normalized AgentTask with all required domain fields', () => {
     const task = createAgentTask({
       instruction: 'explain Redis Streams',
@@ -70,6 +77,10 @@ describe('AgentTask & MockAgentExecutor', () => {
 
   it('HermesAgentExecutor initializes with correct options and handles execution failure gracefully', async () => {
     const { HermesAgentExecutor } = await import('../src/agent/hermes-executor');
+    execFileMock.mockImplementation((_file, _args, _options, callback) => {
+      callback(new Error('spawn ENOENT'), '', 'binary missing');
+      return undefined;
+    });
     const hermesExecutor = new HermesAgentExecutor({
       cliPath: 'non-existent-hermes-binary-xyz',
       timeoutMs: 500,
@@ -87,6 +98,40 @@ describe('AgentTask & MockAgentExecutor', () => {
     expect(result.success).toBe(false);
     expect(result.message).toBe("I couldn't complete that request.");
     expect(result.metadata?.error).toBeDefined();
+  });
+
+  it('invokes the dedicated Mattermost Hermes profile without yolo or model override', async () => {
+    const { HermesAgentExecutor } = await import('../src/agent/hermes-executor');
+    execFileMock.mockImplementation((_file, _args, _options, callback) => {
+      callback(null, 'Executor response\n', '');
+      return undefined;
+    });
+
+    const executor = new HermesAgentExecutor({
+      cliPath: '/usr/local/bin/hermes',
+      profile: 'mattermost-agent',
+    });
+    const task = createAgentTask({
+      instruction: 'Explain Redis Streams',
+      threadContext: [{ author: 'alice', message: 'We need durable event processing.' }],
+      channelId: 'engineering',
+      rootPostId: 'root_1',
+      sourcePostId: 'post_1',
+      requestedBy: '@egagofurtriwahana',
+    });
+
+    const result = await executor.execute(task);
+
+    expect(result).toMatchObject({ success: true, message: 'Executor response' });
+    expect(execFileMock).toHaveBeenCalledWith(
+      '/usr/local/bin/hermes',
+      expect.arrayContaining(['-p', 'mattermost-agent', '-z']),
+      expect.objectContaining({ timeout: 120000 }),
+      expect.any(Function),
+    );
+    const args = execFileMock.mock.calls[0][1] as string[];
+    expect(args).not.toContain('--yolo');
+    expect(args).not.toContain('-m');
   });
 });
 

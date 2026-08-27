@@ -15,8 +15,7 @@ export function createDefaultExecutor(config: ReturnType<typeof loadAgentConfig>
       invocationMode: config.HERMES_INVOCATION_MODE,
       containerName: config.HERMES_CONTAINER_NAME,
       apiUrl: config.HERMES_API_URL,
-      model: config.HERMES_MODEL,
-      yolo: config.HERMES_YOLO,
+      profile: config.HERMES_PROFILE,
     });
   }
 
