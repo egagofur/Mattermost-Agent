@@ -82,7 +82,7 @@ describe('MattermostAgentListener (Integration & Executor Layer)', () => {
     expect(handled).toBe(true);
     expect(mockClient.createPost).toHaveBeenCalledTimes(1);
     expect(createdPosts.length).toBe(1);
-    expect(createdPosts[0].message).toBe('Executor response: explain CQRS pattern');
+    expect(createdPosts[0].message).toBe('Executor response: explain CQRS pattern\n\n_~ from AI Agent_');
     expect(createdPosts[0].root_id).toBe('post_human_self_1'); // Replied to root
     expect(stateManager.isProcessed('post_human_self_1')).toBe(true);
   });
@@ -277,7 +277,7 @@ describe('MattermostAgentListener (Integration & Executor Layer)', () => {
     await listener.handlePost(triggerPost);
 
     expect(createdPosts.length).toBe(1);
-    expect(createdPosts[0].message).toBe("I couldn't complete that request.");
+    expect(createdPosts[0].message).toBe("I couldn't complete that request.\n\n_~ from AI Agent_");
   });
 
   it('respects onlySelf mode: ignores other users mentions but allows self mentions', async () => {
@@ -339,5 +339,36 @@ describe('MattermostAgentListener (Integration & Executor Layer)', () => {
     const handled = await listener.handlePost(oldHistoricalPost);
     expect(handled).toBe(false);
     expect(mockClient.createPost).not.toHaveBeenCalled();
+  });
+
+  it('sanitizes markdown headings (# -> **) and formats with custom from attribution', async () => {
+    const headingExecutor = new MockAgentExecutor(async () => {
+      return {
+        success: true,
+        message: '### Heading 3 Title\n\nContent details here.',
+      };
+    });
+
+    listener = new MattermostAgentListener({
+      client: mockClient,
+      stateManager,
+      executor: headingExecutor,
+      username,
+      from: 'Hermes Agent',
+    });
+    await listener.initialize();
+
+    const post: MattermostPost = {
+      id: 'post_heading_test',
+      create_at: Date.now(),
+      user_id: currentUserId,
+      channel_id: 'chan_general_1',
+      root_id: '',
+      message: '@ega format this',
+    };
+
+    await listener.handlePost(post);
+
+    expect(createdPosts[0].message).toBe('**Heading 3 Title**\n\nContent details here.\n\n_~ from Hermes Agent_');
   });
 });

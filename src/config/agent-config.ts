@@ -75,6 +75,11 @@ export const AgentConfigSchema = z.object({
   GEMINI_API_KEY: z.string().optional(),
   AI_MODEL: z.string().optional(),
 
+  MATTERMOST_DEFAULT_FROM: z
+    .string()
+    .optional()
+    .default('AI Agent'),
+
   STATE_FILE_PATH: z
     .string()
     .default('./data/agent-state.json')
@@ -112,6 +117,7 @@ export function loadAgentConfig(overrides?: Partial<Record<string, string | numb
     OPENAI_API_KEY: process.env.OPENAI_API_KEY,
     GEMINI_API_KEY: process.env.GEMINI_API_KEY,
     AI_MODEL: process.env.AI_MODEL,
+    MATTERMOST_DEFAULT_FROM: process.env.MATTERMOST_DEFAULT_FROM,
     STATE_FILE_PATH: process.env.STATE_FILE_PATH,
     LOG_LEVEL: process.env.LOG_LEVEL,
     ...overrides,

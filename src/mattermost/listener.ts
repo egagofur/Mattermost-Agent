@@ -4,6 +4,7 @@ import { AgentStateManager } from '../state/state-manager';
 import { AgentExecutor, MockAgentExecutor } from '../agent/executor';
 import { AgentTask, createAgentTask, ThreadMessage } from '../agent/task';
 import { AIProvider } from '../ai/provider';
+import { formatMessageWithAttribution } from '../infrastructure/mattermost/services/message-formatter';
 
 export interface ListenerOptions {
   client: MattermostClient;
@@ -16,6 +17,7 @@ export interface ListenerOptions {
   maxThreadContext?: number;
   onlySelf?: boolean; // When true, only messages authored by the authenticated account owner will trigger
   ignoreHistoricalPosts?: boolean; // When true, ignores mentions created before the agent started running
+  from?: string; // Optional sender attribution footer (e.g. 'AI Agent', 'Hermes Agent')
 }
 
 export class MattermostAgentListener {
@@ -28,6 +30,7 @@ export class MattermostAgentListener {
   private maxThreadContext: number;
   private onlySelf: boolean;
   private ignoreHistoricalPosts: boolean;
+  private from?: string;
   private startTime: number;
 
   private pollTimer: NodeJS.Timeout | null = null;
@@ -43,6 +46,7 @@ export class MattermostAgentListener {
     this.maxThreadContext = options.maxThreadContext || 10;
     this.onlySelf = options.onlySelf ?? false;
     this.ignoreHistoricalPosts = options.ignoreHistoricalPosts ?? false;
+    this.from = options.from || 'AI Agent';
     this.startTime = Date.now();
 
     // Set executor (or wrap legacy aiProvider if supplied)
@@ -270,9 +274,10 @@ export class MattermostAgentListener {
 
     // 9. Post response to Mattermost (replying to rootPostId)
     try {
+      const formattedMessage = formatMessageWithAttribution(replyMessage, this.from);
       const createdPost = await this.client.createPost({
         channel_id: task.channelId,
-        message: replyMessage,
+        message: formattedMessage,
         root_id: task.rootPostId,
       });
 
