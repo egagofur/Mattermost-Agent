@@ -279,4 +279,65 @@ describe('MattermostAgentListener (Integration & Executor Layer)', () => {
     expect(createdPosts.length).toBe(1);
     expect(createdPosts[0].message).toBe("I couldn't complete that request.");
   });
+
+  it('respects onlySelf mode: ignores other users mentions but allows self mentions', async () => {
+    listener = new MattermostAgentListener({
+      client: mockClient,
+      stateManager,
+      executor: mockExecutor,
+      username,
+      onlySelf: true,
+    });
+    await listener.initialize();
+
+    // 1. Post from another user should be ignored
+    const otherUserPost: MattermostPost = {
+      id: 'post_from_other_user',
+      create_at: Date.now(),
+      user_id: 'usr_stranger_999',
+      channel_id: 'chan_general_1',
+      root_id: '',
+      message: '@ega check this out',
+    };
+    const handledOther = await listener.handlePost(otherUserPost);
+    expect(handledOther).toBe(false);
+    expect(mockClient.createPost).not.toHaveBeenCalled();
+
+    // 2. Post from authenticated user (@ega) MUST trigger
+    const selfPost: MattermostPost = {
+      id: 'post_from_self_user',
+      create_at: Date.now(),
+      user_id: currentUserId,
+      channel_id: 'chan_general_1',
+      root_id: '',
+      message: '@ega test my function',
+    };
+    const handledSelf = await listener.handlePost(selfPost);
+    expect(handledSelf).toBe(true);
+    expect(mockClient.createPost).toHaveBeenCalledTimes(1);
+  });
+
+  it('respects ignoreHistoricalPosts mode: ignores mentions created before agent start', async () => {
+    listener = new MattermostAgentListener({
+      client: mockClient,
+      stateManager,
+      executor: mockExecutor,
+      username,
+      ignoreHistoricalPosts: true,
+    });
+    await listener.initialize();
+
+    const oldHistoricalPost: MattermostPost = {
+      id: 'post_old_history_1',
+      create_at: Date.now() - 1000000, // 16 minutes in the past
+      user_id: currentUserId,
+      channel_id: 'chan_general_1',
+      root_id: '',
+      message: '@ega old mention from yesterday',
+    };
+
+    const handled = await listener.handlePost(oldHistoricalPost);
+    expect(handled).toBe(false);
+    expect(mockClient.createPost).not.toHaveBeenCalled();
+  });
 });

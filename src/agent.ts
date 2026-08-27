@@ -75,6 +75,9 @@ export async function runAgent(customExecutor?: AgentExecutor): Promise<Mattermo
     executor,
     username: config.MATTERMOST_USERNAME,
     pollIntervalSeconds: config.MATTERMOST_POLL_INTERVAL,
+    onlySelf: config.MATTERMOST_ONLY_SELF,
+    ignoreHistoricalPosts: config.MATTERMOST_IGNORE_HISTORICAL,
+    channels: config.MATTERMOST_TARGET_CHANNELS,
   });
 
   // 6. Verify authentication & start polling loop

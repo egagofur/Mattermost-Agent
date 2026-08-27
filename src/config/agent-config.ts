@@ -45,6 +45,19 @@ export const AgentConfigSchema = z.object({
       return isNaN(num) || num <= 0 ? 5 : num;
     }),
 
+  MATTERMOST_ONLY_SELF: z
+    .boolean()
+    .default(true),
+
+  MATTERMOST_IGNORE_HISTORICAL: z
+    .boolean()
+    .default(true),
+
+  MATTERMOST_TARGET_CHANNELS: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.split(',').map((s) => s.trim()).filter(Boolean) : undefined)),
+
   AI_PROVIDER: z
     .enum(['hermes', 'openai', 'gemini', 'mock'])
     .default('hermes'),
@@ -85,6 +98,9 @@ export function loadAgentConfig(overrides?: Partial<Record<string, string | numb
     MATTERMOST_BROWSER_PROFILE_DIR: process.env.MATTERMOST_BROWSER_PROFILE_DIR,
     MATTERMOST_USERNAME: process.env.MATTERMOST_USERNAME,
     MATTERMOST_POLL_INTERVAL: process.env.MATTERMOST_POLL_INTERVAL,
+    MATTERMOST_ONLY_SELF: process.env.MATTERMOST_ONLY_SELF !== undefined ? process.env.MATTERMOST_ONLY_SELF === 'true' || process.env.MATTERMOST_ONLY_SELF === '1' : undefined,
+    MATTERMOST_IGNORE_HISTORICAL: process.env.MATTERMOST_IGNORE_HISTORICAL !== undefined ? process.env.MATTERMOST_IGNORE_HISTORICAL === 'true' || process.env.MATTERMOST_IGNORE_HISTORICAL === '1' : undefined,
+    MATTERMOST_TARGET_CHANNELS: process.env.MATTERMOST_TARGET_CHANNELS,
     AI_PROVIDER: process.env.AI_PROVIDER,
     HERMES_CLI_PATH: process.env.HERMES_CLI_PATH,
     HERMES_INVOCATION_MODE: process.env.HERMES_INVOCATION_MODE,

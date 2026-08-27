@@ -14,6 +14,8 @@ export interface ListenerOptions {
   pollIntervalSeconds?: number;
   channels?: string[]; // Optional: restrict polling to specific channel IDs or names
   maxThreadContext?: number;
+  onlySelf?: boolean; // When true, only messages authored by the authenticated account owner will trigger
+  ignoreHistoricalPosts?: boolean; // When true, ignores mentions created before the agent started running
 }
 
 export class MattermostAgentListener {
@@ -24,6 +26,9 @@ export class MattermostAgentListener {
   private pollIntervalMs: number;
   private targetChannels?: string[];
   private maxThreadContext: number;
+  private onlySelf: boolean;
+  private ignoreHistoricalPosts: boolean;
+  private startTime: number;
 
   private pollTimer: NodeJS.Timeout | null = null;
   private isPolling = false;
@@ -36,6 +41,9 @@ export class MattermostAgentListener {
     this.pollIntervalMs = (options.pollIntervalSeconds || 5) * 1000;
     this.targetChannels = options.channels;
     this.maxThreadContext = options.maxThreadContext || 10;
+    this.onlySelf = options.onlySelf ?? false;
+    this.ignoreHistoricalPosts = options.ignoreHistoricalPosts ?? false;
+    this.startTime = Date.now();
 
     // Set executor (or wrap legacy aiProvider if supplied)
     if (options.executor) {
@@ -180,6 +188,20 @@ export class MattermostAgentListener {
     }
 
     // --- MENTION DETECTED ---
+    // 5. Check historical ignore (ignores mentions authored before this agent session started)
+    if (this.ignoreHistoricalPosts && post.create_at && post.create_at < this.startTime) {
+      console.log(`[INFO] Ignoring historical mention from ${new Date(post.create_at).toISOString()} (Post: ${post.id})`);
+      this.stateManager.markProcessed(post.id);
+      return false;
+    }
+
+    // 6. Check onlySelf validation (restricts trigger execution exclusively to the authenticated user for testing)
+    if (this.onlySelf && this.currentUser && post.user_id !== this.currentUser.id) {
+      console.log(`[INFO] Ignoring mention in post ${post.id}: authored by user ${post.user_id} (onlySelf testing mode enabled).`);
+      this.stateManager.markProcessed(post.id);
+      return false;
+    }
+
     // NOTE: Self-triggering is intentionally supported!
     // A post created by the human user (post.user_id === this.currentUser?.id) WILL proceed here.
     console.log(`[INFO] Mention detected in post: ${post.id} (Channel: ${post.channel_id})`);
@@ -188,7 +210,7 @@ export class MattermostAgentListener {
     this.stateManager.markProcessed(post.id);
     this.stateManager.setLastSeenPostId(post.id);
 
-    // 5. Extract instruction prompt
+    // 7. Extract instruction prompt
     const instruction = extractInstruction(post.message, this.username);
 
     // 6. Retrieve thread context if message is part of a thread
