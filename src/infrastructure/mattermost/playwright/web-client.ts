@@ -78,25 +78,38 @@ export class MattermostWebClient {
         return { authenticated: false };
       }
 
-      // Check for presence of sidebar / user status
-      const userStatusEl = page.locator('#statusDropdown, .status-wrapper, [data-testid="user-avatar"]').first();
-      const isVisible = await userStatusEl.isVisible({ timeout: 5000 }).catch(() => false);
+      // Check genuine authentication via /api/v4/users/me
+      const authResult = await page.evaluate(async () => {
+        try {
+          const cookieMatch = document.cookie.match(/(?:^|;\s*)MMCSRF=([^;]*)/);
+          const csrfToken = cookieMatch ? decodeURIComponent(cookieMatch[1]) : '';
+          const headers: Record<string, string> = {
+            'X-Requested-With': 'XMLHttpRequest',
+          };
+          if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
 
-      let username = 'browser-user';
-      try {
-        const nameEl = page.locator('.sidebar-header__username, .user__name, #statusDropdown').first();
-        if (await nameEl.isVisible({ timeout: 1000 })) {
-          const text = await nameEl.innerText();
-          if (text) username = text.replace(/^@/, '').trim();
+          const res = await fetch('/api/v4/users/me', {
+            headers,
+            credentials: 'include',
+          });
+          if (res.ok) {
+            const user = await res.json();
+            return { authenticated: true, user };
+          }
+          return { authenticated: false, status: res.status };
+        } catch {
+          return { authenticated: false };
         }
-      } catch {
-        // fallback
+      });
+
+      if (!authResult.authenticated || !authResult.user) {
+        return { authenticated: false };
       }
 
       return {
-        authenticated: isVisible || !currentUrl.includes('/login'),
-        username,
-        userId: 'browser-authenticated-user',
+        authenticated: true,
+        username: authResult.user.username || 'personal-account',
+        userId: authResult.user.id || 'browser-authenticated-user',
       };
     } catch (err) {
       this.logger.error('Failed while verifying browser session', { error: String(err) });

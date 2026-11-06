@@ -69,7 +69,7 @@ function handleError(err: unknown): void {
         console.error(`\n💡 Tip: Run 'npm run cli -- enable ${chan}' to enable this channel.`);
       } else if (err.code === 'CHANNEL_NOT_FOUND') {
         console.error(`\n💡 Tip: Run 'npm run cli -- sync' to auto-discover all accessible channels.`);
-      } else if (err.code === 'AUTH_FAILED') {
+      } else if (err.code === 'AUTH_FAILED' || err.code === 'AUTHENTICATION_FAILED') {
         console.error(`\n💡 Tip: Run 'npm run cli -- login' to authenticate your browser session.`);
       }
       console.error('');

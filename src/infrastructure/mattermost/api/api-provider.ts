@@ -12,11 +12,17 @@ import {
   ReplyToMessageInput,
   SendMessageInput,
   SendMessageResult,
+  UnreadChannelSummary,
   UnreadSummaryResult,
   User,
   UserProfileResult,
 } from '../../../domain/mattermost/entities';
-import { MattermostValidationError } from '../../../domain/mattermost/errors';
+import {
+  MattermostAuthenticationError,
+  MattermostAuthorizationError,
+  MattermostProviderError,
+  MattermostValidationError,
+} from '../../../domain/mattermost/errors';
 import { MattermostProvider } from '../../../domain/mattermost/providers/mattermost-provider.interface';
 import { MattermostApiClient, MattermostRawChannel, MattermostRawPost, MattermostRawUser } from './client';
 import { Logger, defaultLogger } from '../services/logger';
@@ -226,16 +232,29 @@ export class MattermostApiProvider implements MattermostProvider {
     const channels = await this.client.getMyChannels();
 
     let allMembers: any[] = [];
+    const warnings: string[] = [];
+    let failedCount = 0;
+
     for (const team of teams) {
       try {
         const members = await this.client.getChannelMembersForTeam(team.id);
         allMembers.push(...members);
       } catch (err) {
-        this.logger.debug(`Could not fetch channel members for team ${team.id}`);
+        if (err instanceof MattermostAuthenticationError || err instanceof MattermostAuthorizationError) {
+          throw err;
+        }
+        failedCount++;
+        const teamName = team.display_name || team.name || team.id;
+        warnings.push(`Failed to fetch channel members for team '${teamName}': ${err instanceof Error ? err.message : String(err)}`);
+        this.logger.debug(`Could not fetch channel members for team ${team.id}`, { error: String(err) });
       }
     }
 
-    const unreads: any[] = [];
+    if (teams.length > 0 && failedCount === teams.length) {
+      throw new MattermostProviderError('Failed to fetch channel members across all teams.');
+    }
+
+    const unreads: UnreadChannelSummary[] = [];
     for (const m of allMembers) {
       const chan = channels.find((c) => c.id === m.channel_id);
       if (chan) {
@@ -265,6 +284,7 @@ export class MattermostApiProvider implements MattermostProvider {
     return {
       totalUnreadChannels: unreads.length,
       channels: unreads,
+      warnings: warnings.length > 0 ? warnings : undefined,
     };
   }
 

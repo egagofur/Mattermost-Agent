@@ -10,7 +10,12 @@ import {
   ThreadViewResult,
   UserMentionItem,
 } from '../../../domain/mattermost/entities';
-import { MattermostError, MattermostValidationError } from '../../../domain/mattermost/errors';
+import {
+  MattermostAuthenticationError,
+  MattermostAuthorizationError,
+  MattermostError,
+  MattermostValidationError,
+} from '../../../domain/mattermost/errors';
 import { MattermostProvider } from '../../../domain/mattermost/providers/mattermost-provider.interface';
 import { Logger, defaultLogger } from './logger';
 import { UserCacheService } from './user-cache';
@@ -404,6 +409,7 @@ export class ThreadService {
     // 3. Check hasReplied for each thread
     const threadPostsCache = new Map<string, Post[]>();
     const repliedMap = new Map<string, boolean>();
+    const warnings: string[] = [];
 
     for (const post of filtered) {
       const rootId = post.rootId || post.id;
@@ -417,7 +423,11 @@ export class ThreadService {
           } else {
             threadPosts = [];
           }
-        } catch {
+        } catch (err) {
+          if (err instanceof MattermostAuthenticationError || err instanceof MattermostAuthorizationError) {
+            throw err;
+          }
+          warnings.push(`Failed to fetch thread posts for root post '${rootId}': ${err instanceof Error ? err.message : String(err)}`);
           threadPosts = [];
         }
         threadPostsCache.set(rootId, threadPosts);
@@ -444,6 +454,7 @@ export class ThreadService {
     return {
       total: mentions.length,
       mentions,
+      warnings: warnings.length > 0 ? warnings : undefined,
     };
   }
 

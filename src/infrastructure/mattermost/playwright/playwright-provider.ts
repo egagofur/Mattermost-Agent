@@ -18,6 +18,7 @@ import {
 } from '../../../domain/mattermost/entities';
 import {
   MattermostAuthenticationError,
+  MattermostAuthorizationError,
   MattermostChannelNotFoundError,
   MattermostProviderError,
   MattermostValidationError,
@@ -67,35 +68,53 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
     await this.ensureAuthenticated();
     const page = await this.webClient.getPage();
 
+    let rawUser: any;
     try {
-      const rawUser = await page.evaluate(async () => {
-        const res = await fetch('/api/v4/users/me', { credentials: 'include' });
-        if (res.ok) {
-          return res.json();
-        }
-        return null;
-      });
-
-      if (rawUser && rawUser.id) {
-        return {
-          id: rawUser.id,
-          username: rawUser.username,
-          email: rawUser.email,
-          firstName: rawUser.first_name,
-          lastName: rawUser.last_name,
-          nickname: rawUser.nickname,
-          roles: rawUser.roles,
-          createAt: rawUser.create_at,
+      rawUser = await page.evaluate(async () => {
+        const cookieMatch = document.cookie.match(/(?:^|;\s*)MMCSRF=([^;]*)/);
+        const csrfToken = cookieMatch ? decodeURIComponent(cookieMatch[1]) : '';
+        const headers: Record<string, string> = {
+          'X-Requested-With': 'XMLHttpRequest',
         };
+        if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+
+        const res = await fetch('/api/v4/users/me', { headers, credentials: 'include' });
+        if (res.status === 401 || res.status === 403) {
+          throw new Error(`AUTH_${res.status}: Authentication failed`);
+        }
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+        }
+        return res.json();
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('AUTH_401') || msg.includes('401')) {
+        throw new MattermostAuthenticationError(
+          'Mattermost authentication failed or session expired. Please log in using "npm run cli -- login".'
+        );
       }
-    } catch {
-      // Fallback
+      if (msg.includes('AUTH_403') || msg.includes('403')) {
+        throw new MattermostAuthorizationError('Mattermost authorization failed. Insufficient permissions.');
+      }
+      throw new MattermostProviderError(`Failed to fetch authenticated user profile: ${msg}`);
+    }
+
+    if (!rawUser || !rawUser.id) {
+      throw new MattermostAuthenticationError(
+        'Mattermost authentication failed: invalid user payload returned from session. Please log in using "npm run cli -- login".'
+      );
     }
 
     return {
-      id: 'browser-authenticated-user',
-      username: 'personal-account',
-      roles: 'system_user',
+      id: rawUser.id,
+      username: rawUser.username || 'personal-account',
+      email: rawUser.email,
+      firstName: rawUser.first_name,
+      lastName: rawUser.last_name,
+      nickname: rawUser.nickname,
+      roles: rawUser.roles || 'system_user',
+      createAt: rawUser.create_at,
     };
   }
 
@@ -161,17 +180,23 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
     try {
       this.logger.debug('Discovering channels via in-browser authenticated session...');
       const apiChannels = await page.evaluate(async (targetTeamId) => {
+        const cookieMatch = document.cookie.match(/(?:^|;\s*)MMCSRF=([^;]*)/);
+        const csrfToken = cookieMatch ? decodeURIComponent(cookieMatch[1]) : '';
+        const headers: Record<string, string> = {
+          'X-Requested-With': 'XMLHttpRequest',
+        };
+        if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+
         let teams: Array<{ id: string; name: string }> = [];
 
         if (targetTeamId) {
           teams = [{ id: targetTeamId, name: targetTeamId }];
         } else {
-          try {
-            const teamsRes = await fetch('/api/v4/users/me/teams', { credentials: 'include' });
-            if (teamsRes.ok) {
-              teams = await teamsRes.json();
-            }
-          } catch {}
+          const teamsRes = await fetch('/api/v4/users/me/teams', { headers, credentials: 'include' });
+          if (teamsRes.status === 401 || teamsRes.status === 403) throw new Error(`AUTH_${teamsRes.status}`);
+          if (teamsRes.ok) {
+            teams = await teamsRes.json();
+          }
         }
 
         const allChannels: Array<{
@@ -186,26 +211,24 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
 
         if (Array.isArray(teams) && teams.length > 0) {
           for (const team of teams) {
-            try {
-              const res = await fetch(`/api/v4/users/me/teams/${team.id}/channels`, { credentials: 'include' });
-              if (res.ok) {
-                const list = await res.json();
-                if (Array.isArray(list)) {
-                  allChannels.push(...list);
-                }
-              }
-            } catch {}
-          }
-        } else {
-          try {
-            const res = await fetch('/api/v4/users/me/channels', { credentials: 'include' });
+            const res = await fetch(`/api/v4/users/me/teams/${team.id}/channels`, { headers, credentials: 'include' });
+            if (res.status === 401 || res.status === 403) throw new Error(`AUTH_${res.status}`);
             if (res.ok) {
               const list = await res.json();
               if (Array.isArray(list)) {
                 allChannels.push(...list);
               }
             }
-          } catch {}
+          }
+        } else {
+          const res = await fetch('/api/v4/users/me/channels', { headers, credentials: 'include' });
+          if (res.status === 401 || res.status === 403) throw new Error(`AUTH_${res.status}`);
+          if (res.ok) {
+            const list = await res.json();
+            if (Array.isArray(list)) {
+              allChannels.push(...list);
+            }
+          }
         }
 
         return allChannels;
@@ -230,6 +253,15 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
         }
       }
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('AUTH_401') || msg.includes('401')) {
+        throw new MattermostAuthenticationError(
+          'Mattermost authentication failed or session expired. Please log in using "npm run cli -- login".'
+        );
+      }
+      if (msg.includes('AUTH_403') || msg.includes('403')) {
+        throw new MattermostAuthorizationError('Mattermost authorization failed. Insufficient permissions.');
+      }
       this.logger.debug('In-browser fetch discovery failed, falling back to DOM scraping', {
         error: String(err),
       });
@@ -452,6 +484,13 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
     try {
       const rawList = await page.evaluate(
         async ({ channelId, limit, since }) => {
+          const cookieMatch = document.cookie.match(/(?:^|;\s*)MMCSRF=([^;]*)/);
+          const csrfToken = cookieMatch ? decodeURIComponent(cookieMatch[1]) : '';
+          const headers: Record<string, string> = {
+            'X-Requested-With': 'XMLHttpRequest',
+          };
+          if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+
           const params = new URLSearchParams({
             page: '0',
             per_page: (limit || 30).toString(),
@@ -459,8 +498,10 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
           if (since) params.set('since', since.toString());
 
           const res = await fetch(`/api/v4/channels/${channelId}/posts?${params.toString()}`, {
+            headers,
             credentials: 'include',
           });
+          if (res.status === 401 || res.status === 403) throw new Error(`AUTH_${res.status}`);
           if (res.ok) {
             return res.json();
           }
@@ -486,8 +527,17 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
             props: p.props,
           }));
       }
-    } catch {
-      // Fallback
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('AUTH_401') || msg.includes('401')) {
+        throw new MattermostAuthenticationError(
+          'Mattermost authentication failed or session expired. Please log in using "npm run cli -- login".'
+        );
+      }
+      if (msg.includes('AUTH_403') || msg.includes('403')) {
+        throw new MattermostAuthorizationError('Mattermost authorization failed. Insufficient permissions.');
+      }
+      // Fallback to UI navigation
     }
 
     const channelPage = new MattermostChannelPage(page, this.baseUrl, this.logger);
@@ -521,10 +571,16 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
           headers,
           credentials: 'include',
         });
-        if (res.ok) {
-          return res.json();
+        if (res.status === 401 || res.status === 403) {
+          throw new Error(`AUTH_${res.status}: Session expired or unauthorized`);
         }
-        return null;
+        if (res.status === 404) {
+          return null;
+        }
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+        }
+        return res.json();
       }, postId);
 
       const posts: Record<string, Post> = {};
@@ -565,8 +621,19 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
         posts,
       };
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('AUTH_401') || msg.includes('401')) {
+        throw new MattermostAuthenticationError(
+          'Mattermost authentication failed or session expired. Please log in using "npm run cli -- login".'
+        );
+      }
+      if (msg.includes('AUTH_403') || msg.includes('403')) {
+        throw new MattermostAuthorizationError(
+          `Mattermost authorization failed for post '${postId}'. Insufficient permissions.`
+        );
+      }
       throw new MattermostProviderError(
-        `Failed to retrieve thread for post '${postId}' via browser session: ${err instanceof Error ? err.message : String(err)}`
+        `Failed to retrieve thread for post '${postId}' via browser session: ${msg}`
       );
     }
   }
@@ -595,10 +662,13 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
             headers,
             body: JSON.stringify({ terms, is_or_search: isOrSearch }),
           });
-          if (res.ok) {
-            return res.json();
+          if (res.status === 401 || res.status === 403) {
+            throw new Error(`AUTH_${res.status}: Session expired or unauthorized`);
           }
-          return null;
+          if (!res.ok) {
+            throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+          }
+          return res.json();
         },
         { terms, teamId: options?.teamId, isOrSearch: options?.isOrSearch ?? false }
       );
@@ -638,8 +708,17 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
           })),
         }));
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('AUTH_401') || msg.includes('401')) {
+        throw new MattermostAuthenticationError(
+          'Mattermost authentication failed or session expired. Please log in using "npm run cli -- login".'
+        );
+      }
+      if (msg.includes('AUTH_403') || msg.includes('403')) {
+        throw new MattermostAuthorizationError('Mattermost authorization failed for search: Insufficient permissions.');
+      }
       throw new MattermostProviderError(
-        `Failed to search posts for terms '${terms}' via browser session: ${err instanceof Error ? err.message : String(err)}`
+        `Failed to search posts for terms '${terms}' via browser session: ${msg}`
       );
     }
   }
@@ -665,6 +744,9 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
           headers,
           body: JSON.stringify(ids),
         });
+        if (res.status === 401 || res.status === 403) {
+          throw new Error(`AUTH_${res.status}: Session expired or unauthorized`);
+        }
         if (res.ok) {
           return res.json();
         }
@@ -681,7 +763,16 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
         roles: u.roles,
         createAt: u.create_at,
       }));
-    } catch {
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('AUTH_401') || msg.includes('401')) {
+        throw new MattermostAuthenticationError(
+          'Mattermost authentication failed or session expired. Please log in using "npm run cli -- login".'
+        );
+      }
+      if (msg.includes('AUTH_403') || msg.includes('403')) {
+        throw new MattermostAuthorizationError('Mattermost authorization failed. Insufficient permissions.');
+      }
       return [];
     }
   }
@@ -700,17 +791,32 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
         if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
 
         const teamsRes = await fetch('/api/v4/users/me/teams', { headers, credentials: 'include' });
-        const teams = teamsRes.ok ? await teamsRes.json() : [];
+        if (teamsRes.status === 401 || teamsRes.status === 403) throw new Error(`AUTH_${teamsRes.status}`);
+        if (!teamsRes.ok) throw new Error(`HTTP ${teamsRes.status}: Failed to fetch teams`);
+        const teams = await teamsRes.json();
+
         const channelsRes = await fetch('/api/v4/users/me/channels', { headers, credentials: 'include' });
-        const channels = channelsRes.ok ? await channelsRes.json() : [];
+        if (channelsRes.status === 401 || channelsRes.status === 403) throw new Error(`AUTH_${channelsRes.status}`);
+        if (!channelsRes.ok) throw new Error(`HTTP ${channelsRes.status}: Failed to fetch channels`);
+        const channels = await channelsRes.json();
 
         let allMembers: any[] = [];
+        const warnings: string[] = [];
+        let failedCount = 0;
         for (const t of teams) {
           const mRes = await fetch(`/api/v4/users/me/teams/${t.id}/channels/members`, { headers, credentials: 'include' });
+          if (mRes.status === 401 || mRes.status === 403) throw new Error(`AUTH_${mRes.status}`);
           if (mRes.ok) {
             const m = await mRes.json();
             allMembers.push(...m);
+          } else {
+            failedCount++;
+            warnings.push(`Failed to fetch channel members for team '${t.display_name || t.name || t.id}' (HTTP ${mRes.status})`);
           }
+        }
+
+        if (teams.length > 0 && failedCount === teams.length) {
+          throw new Error('All teams failed to fetch channel members');
         }
 
         const unreads: any[] = [];
@@ -733,22 +839,32 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
             }
           }
         }
-        return unreads;
+        return { unreads, warnings };
       });
 
-      res.sort((a: any, b: any) => {
+      res.unreads.sort((a: any, b: any) => {
         if (a.hasMention !== b.hasMention) return a.hasMention ? -1 : 1;
         if (b.mentionCount !== a.mentionCount) return b.mentionCount - a.mentionCount;
         return b.unreadCount - a.unreadCount;
       });
 
       return {
-        totalUnreadChannels: res.length,
-        channels: res,
+        totalUnreadChannels: res.unreads.length,
+        channels: res.unreads,
+        warnings: res.warnings && res.warnings.length > 0 ? res.warnings : undefined,
       };
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('AUTH_401') || msg.includes('401')) {
+        throw new MattermostAuthenticationError(
+          'Mattermost authentication failed or session expired. Please log in using "npm run cli -- login".'
+        );
+      }
+      if (msg.includes('AUTH_403') || msg.includes('403')) {
+        throw new MattermostAuthorizationError('Mattermost authorization failed. Insufficient permissions.');
+      }
       throw new MattermostProviderError(
-        `Failed to retrieve unread summary via browser session: ${err instanceof Error ? err.message : String(err)}`
+        `Failed to retrieve unread summary via browser session: ${msg}`
       );
     }
   }
@@ -756,22 +872,41 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
   public async getPost(postId: string): Promise<Post> {
     await this.ensureAuthenticated();
     const page = await this.webClient.getPage();
-    const rawPost = await page.evaluate(async (targetPostId) => {
-      const cookieMatch = document.cookie.match(/(?:^|;\s*)MMCSRF=([^;]*)/);
-      const csrfToken = cookieMatch ? decodeURIComponent(cookieMatch[1]) : '';
-      const headers: Record<string, string> = {
-        'X-Requested-With': 'XMLHttpRequest',
-      };
-      if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+    let rawPost: any;
+    try {
+      rawPost = await page.evaluate(async (targetPostId) => {
+        const cookieMatch = document.cookie.match(/(?:^|;\s*)MMCSRF=([^;]*)/);
+        const csrfToken = cookieMatch ? decodeURIComponent(cookieMatch[1]) : '';
+        const headers: Record<string, string> = {
+          'X-Requested-With': 'XMLHttpRequest',
+        };
+        if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
 
-      const res = await fetch(`/api/v4/posts/${encodeURIComponent(targetPostId)}`, {
-        headers,
-        credentials: 'include',
-      });
-      if (res.status === 404) return null;
-      if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-      return res.json();
-    }, postId);
+        const res = await fetch(`/api/v4/posts/${encodeURIComponent(targetPostId)}`, {
+          headers,
+          credentials: 'include',
+        });
+        if (res.status === 401 || res.status === 403) {
+          throw new Error(`AUTH_${res.status}: Session expired or unauthorized`);
+        }
+        if (res.status === 404) return null;
+        if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+        return res.json();
+      }, postId);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('AUTH_401') || msg.includes('401')) {
+        throw new MattermostAuthenticationError(
+          'Mattermost authentication failed or session expired. Please log in using "npm run cli -- login".'
+        );
+      }
+      if (msg.includes('AUTH_403') || msg.includes('403')) {
+        throw new MattermostAuthorizationError(
+          `Mattermost authorization failed for post '${postId}'. Insufficient permissions.`
+        );
+      }
+      throw new MattermostProviderError(`Failed to retrieve post '${postId}': ${msg}`);
+    }
 
     if (!rawPost) {
       throw new MattermostValidationError(`Post not found with ID '${postId}'.`);
@@ -813,28 +948,47 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
     await this.ensureAuthenticated();
     const page = await this.webClient.getPage();
 
-    const rawList = await page.evaluate(
-      async ({ chanId, before, after, limit }) => {
-        const cookieMatch = document.cookie.match(/(?:^|;\s*)MMCSRF=([^;]*)/);
-        const csrfToken = cookieMatch ? decodeURIComponent(cookieMatch[1]) : '';
-        const headers: Record<string, string> = {
-          'X-Requested-With': 'XMLHttpRequest',
-        };
-        if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+    let rawList: any;
+    try {
+      rawList = await page.evaluate(
+        async ({ chanId, before, after, limit }) => {
+          const cookieMatch = document.cookie.match(/(?:^|;\s*)MMCSRF=([^;]*)/);
+          const csrfToken = cookieMatch ? decodeURIComponent(cookieMatch[1]) : '';
+          const headers: Record<string, string> = {
+            'X-Requested-With': 'XMLHttpRequest',
+          };
+          if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
 
-        const params = new URLSearchParams();
-        if (limit) params.set('per_page', limit.toString());
-        if (before) params.set('before', before);
-        if (after) params.set('after', after);
-        const res = await fetch(`/api/v4/channels/${encodeURIComponent(chanId)}/posts?${params.toString()}`, {
-          headers,
-          credentials: 'include',
-        });
-        if (!res.ok) return null;
-        return res.json();
-      },
-      { chanId: channelId, before: options.before, after: options.after, limit: options.limit || 30 }
-    );
+          const params = new URLSearchParams();
+          if (limit) params.set('per_page', limit.toString());
+          if (before) params.set('before', before);
+          if (after) params.set('after', after);
+          const res = await fetch(`/api/v4/channels/${encodeURIComponent(chanId)}/posts?${params.toString()}`, {
+            headers,
+            credentials: 'include',
+          });
+          if (res.status === 401 || res.status === 403) {
+            throw new Error(`AUTH_${res.status}: Session expired or unauthorized`);
+          }
+          if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+          return res.json();
+        },
+        { chanId: channelId, before: options.before, after: options.after, limit: options.limit || 30 }
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('AUTH_401') || msg.includes('401')) {
+        throw new MattermostAuthenticationError(
+          'Mattermost authentication failed or session expired. Please log in using "npm run cli -- login".'
+        );
+      }
+      if (msg.includes('AUTH_403') || msg.includes('403')) {
+        throw new MattermostAuthorizationError(
+          `Mattermost authorization failed for channel '${channelId}'. Insufficient permissions.`
+        );
+      }
+      throw new MattermostProviderError(`Failed to retrieve posts for channel '${channelId}': ${msg}`);
+    }
 
     if (!rawList || !rawList.order || !rawList.posts) {
       return [];
@@ -878,25 +1032,44 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
     const clean = usernameOrId.trim().replace(/^@/, '');
     const isId = /^[a-z0-9]{26}$/i.test(clean);
 
-    const rawUser = await page.evaluate(
-      async ({ target, isUserId }) => {
-        const cookieMatch = document.cookie.match(/(?:^|;\s*)MMCSRF=([^;]*)/);
-        const csrfToken = cookieMatch ? decodeURIComponent(cookieMatch[1]) : '';
-        const headers: Record<string, string> = {
-          'X-Requested-With': 'XMLHttpRequest',
-        };
-        if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+    let rawUser: any;
+    try {
+      rawUser = await page.evaluate(
+        async ({ target, isUserId }) => {
+          const cookieMatch = document.cookie.match(/(?:^|;\s*)MMCSRF=([^;]*)/);
+          const csrfToken = cookieMatch ? decodeURIComponent(cookieMatch[1]) : '';
+          const headers: Record<string, string> = {
+            'X-Requested-With': 'XMLHttpRequest',
+          };
+          if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
 
-        const path = isUserId
-          ? `/api/v4/users/${encodeURIComponent(target)}`
-          : `/api/v4/users/username/${encodeURIComponent(target)}`;
-        const res = await fetch(path, { headers, credentials: 'include' });
-        if (res.status === 404) return null;
-        if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-        return res.json();
-      },
-      { target: clean, isUserId: isId }
-    );
+          const path = isUserId
+            ? `/api/v4/users/${encodeURIComponent(target)}`
+            : `/api/v4/users/username/${encodeURIComponent(target)}`;
+          const res = await fetch(path, { headers, credentials: 'include' });
+          if (res.status === 401 || res.status === 403) {
+            throw new Error(`AUTH_${res.status}: Session expired or unauthorized`);
+          }
+          if (res.status === 404) return null;
+          if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+          return res.json();
+        },
+        { target: clean, isUserId: isId }
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('AUTH_401') || msg.includes('401')) {
+        throw new MattermostAuthenticationError(
+          'Mattermost authentication failed or session expired. Please log in using "npm run cli -- login".'
+        );
+      }
+      if (msg.includes('AUTH_403') || msg.includes('403')) {
+        throw new MattermostAuthorizationError(
+          `Mattermost authorization failed for user '${usernameOrId}'. Insufficient permissions.`
+        );
+      }
+      throw new MattermostProviderError(`Failed to fetch user profile '${usernameOrId}': ${msg}`);
+    }
 
     if (!rawUser) {
       throw new MattermostValidationError(`User '${usernameOrId}' not found.`);
@@ -924,6 +1097,16 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
 
     const context = await this.webClient.getContext();
     const infoRes = await context.request.get(`${this.baseUrl}/api/v4/files/${encodeURIComponent(cleanId)}/info`);
+    if (infoRes.status() === 401) {
+      throw new MattermostAuthenticationError(
+        'Mattermost authentication failed or session expired. Please log in using "npm run cli -- login".'
+      );
+    }
+    if (infoRes.status() === 403) {
+      throw new MattermostAuthorizationError(
+        `Mattermost authorization failed for file '${cleanId}'. Insufficient permissions.`
+      );
+    }
     if (infoRes.status() === 404) {
       throw new MattermostValidationError(`File with ID '${cleanId}' not found.`);
     }
@@ -951,6 +1134,16 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
     }
 
     const dataRes = await context.request.get(`${this.baseUrl}/api/v4/files/${encodeURIComponent(cleanId)}`);
+    if (dataRes.status() === 401) {
+      throw new MattermostAuthenticationError(
+        'Mattermost authentication failed or session expired. Please log in using "npm run cli -- login".'
+      );
+    }
+    if (dataRes.status() === 403) {
+      throw new MattermostAuthorizationError(
+        `Mattermost authorization failed for file '${cleanId}'. Insufficient permissions.`
+      );
+    }
     if (!dataRes.ok()) {
       throw new MattermostProviderError(`Failed to download file data: HTTP ${dataRes.status()}`);
     }

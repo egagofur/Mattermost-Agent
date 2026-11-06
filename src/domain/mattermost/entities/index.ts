@@ -153,6 +153,7 @@ export interface UserMentionItem {
 export interface MentionsResult {
   total: number;
   mentions: UserMentionItem[];
+  warnings?: string[];
 }
 
 export interface SearchFilterOptions {
@@ -170,6 +171,7 @@ export interface SearchPostsResult {
   total: number;
   query: string;
   posts: ThreadPostItem[];
+  warnings?: string[];
 }
 
 export interface UnreadChannelSummary {
@@ -186,6 +188,7 @@ export interface UnreadChannelSummary {
 export interface UnreadSummaryResult {
   totalUnreadChannels: number;
   channels: UnreadChannelSummary[];
+  warnings?: string[];
 }
 
 export interface PostContextResult {

@@ -45,6 +45,14 @@ export class UserCacheService {
           }
         }
       } catch (err) {
+        if (
+          err &&
+          typeof err === 'object' &&
+          'code' in err &&
+          ((err as any).code === 'AUTHENTICATION_FAILED' || (err as any).code === 'FORBIDDEN')
+        ) {
+          throw err;
+        }
         this.logger.debug('Failed to batch resolve users by IDs', { error: String(err) });
       }
     }

@@ -41,7 +41,11 @@ export class MattermostError extends Error {
 }
 
 export class MattermostAuthenticationError extends MattermostError {
-  constructor(message = 'Mattermost authentication failed or session expired.', details?: Record<string, unknown>, cause?: unknown) {
+  constructor(
+    message = 'Mattermost authentication failed or session expired. Please log in using "npm run cli -- login".',
+    details?: Record<string, unknown>,
+    cause?: unknown
+  ) {
     super(message, {
       code: 'AUTHENTICATION_FAILED',
       statusCode: 401,
