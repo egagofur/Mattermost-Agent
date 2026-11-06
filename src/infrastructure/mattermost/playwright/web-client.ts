@@ -61,7 +61,13 @@ export class MattermostWebClient {
     this.logger.debug(`Navigating to ${this.baseUrl} to verify session...`);
 
     try {
-      await page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      try {
+        await page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      } catch (gotoErr) {
+        if (!String(gotoErr).includes('ERR_ABORTED')) {
+          throw gotoErr;
+        }
+      }
       await page.waitForTimeout(1500);
 
       const currentUrl = page.url();
