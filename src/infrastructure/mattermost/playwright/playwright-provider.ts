@@ -510,7 +510,15 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
 
     try {
       const rawThread = await page.evaluate(async (targetPostId) => {
+        const cookieMatch = document.cookie.match(/(?:^|;\s*)MMCSRF=([^;]*)/);
+        const csrfToken = cookieMatch ? decodeURIComponent(cookieMatch[1]) : '';
+        const headers: Record<string, string> = {
+          'X-Requested-With': 'XMLHttpRequest',
+        };
+        if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+
         const res = await fetch(`/api/v4/posts/${encodeURIComponent(targetPostId)}/thread`, {
+          headers,
           credentials: 'include',
         });
         if (res.ok) {
@@ -684,14 +692,21 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
 
     try {
       const res = await page.evaluate(async () => {
-        const teamsRes = await fetch('/api/v4/users/me/teams', { credentials: 'include' });
+        const cookieMatch = document.cookie.match(/(?:^|;\s*)MMCSRF=([^;]*)/);
+        const csrfToken = cookieMatch ? decodeURIComponent(cookieMatch[1]) : '';
+        const headers: Record<string, string> = {
+          'X-Requested-With': 'XMLHttpRequest',
+        };
+        if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+
+        const teamsRes = await fetch('/api/v4/users/me/teams', { headers, credentials: 'include' });
         const teams = teamsRes.ok ? await teamsRes.json() : [];
-        const channelsRes = await fetch('/api/v4/users/me/channels', { credentials: 'include' });
+        const channelsRes = await fetch('/api/v4/users/me/channels', { headers, credentials: 'include' });
         const channels = channelsRes.ok ? await channelsRes.json() : [];
 
         let allMembers: any[] = [];
         for (const t of teams) {
-          const mRes = await fetch(`/api/v4/users/me/teams/${t.id}/channels/members`, { credentials: 'include' });
+          const mRes = await fetch(`/api/v4/users/me/teams/${t.id}/channels/members`, { headers, credentials: 'include' });
           if (mRes.ok) {
             const m = await mRes.json();
             allMembers.push(...m);
@@ -742,7 +757,15 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
     await this.ensureAuthenticated();
     const page = await this.webClient.getPage();
     const rawPost = await page.evaluate(async (targetPostId) => {
+      const cookieMatch = document.cookie.match(/(?:^|;\s*)MMCSRF=([^;]*)/);
+      const csrfToken = cookieMatch ? decodeURIComponent(cookieMatch[1]) : '';
+      const headers: Record<string, string> = {
+        'X-Requested-With': 'XMLHttpRequest',
+      };
+      if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+
       const res = await fetch(`/api/v4/posts/${encodeURIComponent(targetPostId)}`, {
+        headers,
         credentials: 'include',
       });
       if (res.status === 404) return null;
@@ -792,11 +815,19 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
 
     const rawList = await page.evaluate(
       async ({ chanId, before, after, limit }) => {
+        const cookieMatch = document.cookie.match(/(?:^|;\s*)MMCSRF=([^;]*)/);
+        const csrfToken = cookieMatch ? decodeURIComponent(cookieMatch[1]) : '';
+        const headers: Record<string, string> = {
+          'X-Requested-With': 'XMLHttpRequest',
+        };
+        if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+
         const params = new URLSearchParams();
         if (limit) params.set('per_page', limit.toString());
         if (before) params.set('before', before);
         if (after) params.set('after', after);
         const res = await fetch(`/api/v4/channels/${encodeURIComponent(chanId)}/posts?${params.toString()}`, {
+          headers,
           credentials: 'include',
         });
         if (!res.ok) return null;
@@ -849,10 +880,17 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
 
     const rawUser = await page.evaluate(
       async ({ target, isUserId }) => {
+        const cookieMatch = document.cookie.match(/(?:^|;\s*)MMCSRF=([^;]*)/);
+        const csrfToken = cookieMatch ? decodeURIComponent(cookieMatch[1]) : '';
+        const headers: Record<string, string> = {
+          'X-Requested-With': 'XMLHttpRequest',
+        };
+        if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+
         const path = isUserId
           ? `/api/v4/users/${encodeURIComponent(target)}`
           : `/api/v4/users/username/${encodeURIComponent(target)}`;
-        const res = await fetch(path, { credentials: 'include' });
+        const res = await fetch(path, { headers, credentials: 'include' });
         if (res.status === 404) return null;
         if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
         return res.json();
