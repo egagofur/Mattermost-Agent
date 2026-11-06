@@ -10,7 +10,11 @@ import {
   SendMessageResult,
   User,
 } from '../../../domain/mattermost/entities';
-import { MattermostAuthenticationError, MattermostProviderError } from '../../../domain/mattermost/errors';
+import {
+  MattermostAuthenticationError,
+  MattermostChannelNotFoundError,
+  MattermostProviderError,
+} from '../../../domain/mattermost/errors';
 import { MattermostProvider } from '../../../domain/mattermost/providers/mattermost-provider.interface';
 import { Logger, defaultLogger } from '../services/logger';
 import { MattermostChannelPage } from './page-objects/channel-page';
@@ -127,7 +131,10 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
     }
 
     const channelPage = new MattermostChannelPage(page, this.baseUrl, this.logger);
-    const channelIdentifier = input.channelName || input.channelId || 'town-square';
+    const channelIdentifier = input.channelName || input.channelId;
+    if (!channelIdentifier) {
+      throw new MattermostChannelNotFoundError('unknown', { reason: 'No channel name or channel ID provided.' });
+    }
     await channelPage.navigateToChannel(channelIdentifier, input.teamId || this.defaultTeamName);
     const title = await channelPage.getChannelTitle();
 
@@ -244,13 +251,6 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
           });
         }
       }
-    }
-
-    if (channels.length === 0) {
-      channels.push(
-        { id: 'town-square', name: 'town-square', displayName: 'Town Square', type: 'O' },
-        { id: 'off-topic', name: 'off-topic', displayName: 'Off-Topic', type: 'O' }
-      );
     }
 
     return channels;

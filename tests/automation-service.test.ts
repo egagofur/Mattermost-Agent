@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { MattermostAutomationService } from '../src/application/mattermost/services/automation-service';
 import { MattermostProvider } from '../src/domain/mattermost/providers/mattermost-provider.interface';
+import { MattermostChannelNotFoundError } from '../src/domain/mattermost/errors';
 import { loadConfig } from '../src/config/env';
 
 describe('MattermostAutomationService', () => {
@@ -98,6 +99,26 @@ describe('MattermostAutomationService', () => {
         message: 'MR !123 ready',
       })
     );
+  });
+
+  it('throws MattermostChannelNotFoundError and does NOT send message when channel does not exist', async () => {
+    (mockProvider.getChannel as any).mockRejectedValue(new Error('Channel not found'));
+    (mockProvider.listChannels as any).mockResolvedValue([]);
+
+    const config = loadConfig({
+      MATTERMOST_URL: 'https://mattermost.example.com',
+      MATTERMOST_TOKEN: 'token-123',
+    });
+
+    const service = new MattermostAutomationService({ config, provider: mockProvider });
+    await expect(
+      service.sendMessage({
+        channel: 'ghost-channel-xyz',
+        message: 'This message must never be sent',
+      })
+    ).rejects.toThrow(MattermostChannelNotFoundError);
+
+    expect(mockProvider.sendMessage).not.toHaveBeenCalled();
   });
 
   it('executes structured action payload safely returning ActionResult', async () => {
