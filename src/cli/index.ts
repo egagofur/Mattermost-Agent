@@ -69,7 +69,7 @@ function handleError(err: unknown): void {
         console.error(`\n💡 Tip: Run 'npm run cli -- enable ${chan}' to enable this channel.`);
       } else if (err.code === 'CHANNEL_NOT_FOUND') {
         console.error(`\n💡 Tip: Run 'npm run cli -- sync' to auto-discover all accessible channels.`);
-      } else if (err.code === 'AUTH_FAILED') {
+      } else if (err.code === 'AUTH_FAILED' || err.code === 'AUTHENTICATION_FAILED') {
         console.error(`\n💡 Tip: Run 'npm run cli -- login' to authenticate your browser session.`);
       }
       console.error('');
@@ -196,7 +196,7 @@ program
       }
       targetRootId = ':last';
       if (!targetChannel || targetChannel === ':last' || targetChannel === '--last' || targetChannel === 'last') {
-        targetChannel = lastState?.channelId || 'town-square';
+        targetChannel = lastState?.channelId;
       }
     }
 
@@ -214,8 +214,20 @@ program
       if (extracted) {
         targetRootId = extracted;
         targetMessage = posRootId || posMessage || opts.message;
-        // Channel can default to town-square or let server handle
-        targetChannel = opts.channel || 'town-square';
+        if (opts.channel) {
+          targetChannel = opts.channel;
+        } else {
+          // Resolve actual channel from the thread itself instead of guessing
+          const tempService = getService();
+          try {
+            const threadView = await tempService.getThread(extracted);
+            targetChannel = threadView.channelId;
+          } catch {
+            targetChannel = '';
+          } finally {
+            await tempService.close();
+          }
+        }
       }
     }
 
@@ -297,6 +309,36 @@ program
     }
   });
 
+// react
+program
+  .command('react <postIdOrPermalink> <emojiName>')
+  .description('Add an emoji reaction to a post by post ID or permalink URL')
+  .action(async (postIdOrPermalink, emojiName) => {
+    if (!postIdOrPermalink || !emojiName) {
+      console.error('\n❌ Error: Post ID/Permalink and Emoji Name are required.');
+      console.error('   Usage: mattermost react <postIdOrPermalink> <emojiName>\n');
+      process.exit(1);
+    }
+
+    const service = getService();
+    try {
+      const result = await service.addReaction(postIdOrPermalink, emojiName);
+      if (program.opts().json) {
+        handleOutput(result, true);
+      } else {
+        console.log('\n✨ Reaction added successfully');
+        console.log(`   Post ID:     ${result.postId}`);
+        console.log(`   User ID:     ${result.userId}`);
+        console.log(`   Emoji:       :${result.emojiName}:`);
+        console.log('');
+      }
+    } catch (err) {
+      handleError(err);
+    } finally {
+      await service.close();
+    }
+  });
+
 // threads (Thread Inspector)
 program
   .command('threads [channel] [query]')
@@ -345,6 +387,301 @@ program
         console.log('💡 Quick Reply Shortcuts:');
         console.log(`   • Reply to latest:   npm run reply -- ${channel.name} :1 "<your message>"`);
         console.log(`   • Reply by keyword:  npm run reply -- ${channel.name} --find "<keyword>" "<your message>"\n`);
+      }
+    } catch (err) {
+      handleError(err);
+    } finally {
+      await service.close();
+    }
+  });
+
+// thread (Read full thread sequentially)
+program
+  .command('thread <permalinkOrId>')
+  .description('Read entire sequential thread by post ID or permalink URL')
+  .option('-l, --limit <limit>', 'Maximum number of posts to fetch (default: 200)', '200')
+  .action(async (permalinkOrId, opts) => {
+    if (!permalinkOrId) {
+      console.error('\n❌ Error: Post ID or permalink URL is required.');
+      console.error('   Usage: npm run -s cli -- thread <permalinkOrId> [--limit 200] [--json]\n');
+      process.exit(1);
+    }
+
+    const service = getService();
+    try {
+      const limit = parseInt(opts.limit, 10);
+      const result = await service.getThread(permalinkOrId, isNaN(limit) ? 200 : limit);
+
+      if (program.opts().json) {
+        handleOutput(result, true);
+      } else {
+        console.log(`\n🧵 Thread: ${result.rootId} (Channel: ${result.channelId})`);
+        console.log(`   Total Posts: ${result.totalPosts}${result.truncated ? ' (Truncated: true)' : ''}\n`);
+
+        result.posts.forEach((p, idx) => {
+          const time = ThreadService.formatRelativeTime(p.createAt);
+          const author = p.username ? `@${p.username}` : p.userId;
+          console.log(`[${idx + 1}/${result.posts.length}] ${author} (${time}):`);
+          console.log(`   ${p.message.replace(/\n/g, '\n   ')}`);
+          if (p.files && p.files.length > 0) {
+            const fileList = p.files.map((f) => f.name).join(', ');
+            console.log(`   📎 Files: ${fileList}`);
+          }
+          if (p.reactions && p.reactions.length > 0) {
+            const reactionList = p.reactions.map((r) => `:${r.emojiName}:`).join(' ');
+            console.log(`   ✨ Reactions: ${reactionList}`);
+          }
+          console.log('');
+        });
+      }
+    } catch (err) {
+      handleError(err);
+    } finally {
+      await service.close();
+    }
+  });
+
+// mentions
+program
+  .command('mentions')
+  .description('List recent posts mentioning your account')
+  .option('-s, --since <since>', 'Filter mentions since duration or timestamp (e.g. 24h, 7d, 1h)', '24h')
+  .option('-l, --limit <limit>', 'Maximum number of mentions to return (default: 50)', '50')
+  .option('--team <teamId>', 'Team ID or slug')
+  .action(async (opts) => {
+    const service = getService();
+    try {
+      let sinceMs: number | undefined;
+      if (opts.since) {
+        const rawSince = String(opts.since).trim().toLowerCase();
+        const durationMatch = rawSince.match(/^(\d+)(h|d|m)$/);
+        if (durationMatch) {
+          const num = parseInt(durationMatch[1], 10);
+          const unit = durationMatch[2];
+          const multiplier = unit === 'h' ? 3600000 : unit === 'd' ? 86400000 : 60000;
+          sinceMs = Date.now() - num * multiplier;
+        } else if (/^\d+$/.test(rawSince)) {
+          sinceMs = parseInt(rawSince, 10);
+        }
+      }
+
+      const limit = parseInt(opts.limit, 10);
+      const result = await service.getMentions({
+        since: sinceMs,
+        limit: isNaN(limit) ? 50 : limit,
+        teamId: opts.team,
+      });
+
+      if (program.opts().json) {
+        handleOutput(result, true);
+      } else {
+        console.log(`\n🔔 Mentions: Found ${result.total} post(s) mentioning you\n`);
+        if (result.mentions.length === 0) {
+          console.log('   No mentions found in the specified timeframe.\n');
+          return;
+        }
+
+        result.mentions.forEach((m, idx) => {
+          const status = m.hasReplied ? '✅ REPLIED' : '⏳ UNREPLIED';
+          const time = ThreadService.formatRelativeTime(m.createAt);
+          const author = m.username ? `@${m.username}` : m.userId;
+          console.log(`[${idx + 1}] [${status}] ${author} in #${m.channelName || m.channelId} (${time}):`);
+          console.log(`    ${m.message.replace(/\n/g, '\n    ')}`);
+          console.log(`    Post ID: ${m.id} | Root ID: ${m.rootId || m.id}\n`);
+        });
+      }
+    } catch (err) {
+      handleError(err);
+    } finally {
+      await service.close();
+    }
+  });
+
+// search
+program
+  .command('search [terms...]')
+  .description('Search posts across accessible channels with optional user, channel, and date filters')
+  .option('-f, --from <user>', 'Filter by author username')
+  .option('-c, --in <channel>', 'Filter by channel name')
+  .option('-a, --after <date>', 'Filter after date (YYYY-MM-DD)')
+  .option('-b, --before <date>', 'Filter before date (YYYY-MM-DD)')
+  .option('-l, --limit <limit>', 'Maximum number of results to return (default: 20)', '20')
+  .option('--team <teamId>', 'Team ID or slug')
+  .action(async (termsArray, opts) => {
+    const rawTerms = Array.isArray(termsArray) ? termsArray.join(' ') : termsArray || '';
+    const service = getService();
+    try {
+      const limit = parseInt(opts.limit, 10);
+      const result = await service.search({
+        terms: rawTerms || undefined,
+        from: opts.from,
+        in: opts.in,
+        after: opts.after,
+        before: opts.before,
+        limit: isNaN(limit) ? 20 : limit,
+        teamId: opts.team,
+      });
+
+      if (program.opts().json) {
+        handleOutput(result, true);
+      } else {
+        console.log(`\n🔍 Search Results: Found ${result.total} post(s) for query: "${result.query}"\n`);
+        if (result.posts.length === 0) {
+          console.log('   No matching posts found.\n');
+          return;
+        }
+
+        result.posts.forEach((p, idx) => {
+          const time = ThreadService.formatRelativeTime(p.createAt);
+          const author = p.username ? `@${p.username}` : p.userId;
+          console.log(`[${idx + 1}/${result.posts.length}] ${author} in #${p.channelId} (${time}):`);
+          console.log(`   ${p.message.replace(/\n/g, '\n   ')}`);
+          console.log(`   Post ID: ${p.id}${p.rootId ? ` | Root ID: ${p.rootId}` : ''}\n`);
+        });
+      }
+    } catch (err) {
+      handleError(err);
+    } finally {
+      await service.close();
+    }
+  });
+
+// unread
+program
+  .command('unread')
+  .description('Summarize all channels with unread messages or mentions')
+  .action(async () => {
+    const service = getService();
+    try {
+      const result = await service.getUnreadSummary();
+
+      if (program.opts().json) {
+        handleOutput(result, true);
+      } else {
+        console.log(`\n📬 Unread Channels: ${result.totalUnreadChannels} channel(s) with unread messages/mentions\n`);
+        if (result.channels.length === 0) {
+          console.log('   All caught up! No unread messages or mentions.\n');
+          return;
+        }
+
+        result.channels.forEach((c, idx) => {
+          const mentionBadge = c.hasMention ? `🔴 ${c.mentionCount} MENTION(S)` : '⚪';
+          console.log(`[${idx + 1}] #${c.displayName || c.channelName} (${c.channelId}):`);
+          console.log(`    Unread Messages: ${c.unreadCount} | ${mentionBadge}\n`);
+        });
+      }
+    } catch (err) {
+      handleError(err);
+    } finally {
+      await service.close();
+    }
+  });
+
+// post
+program
+  .command('post <postIdOrPermalink>')
+  .description('View a single post with surrounding contextual messages in the channel')
+  .option('-c, --context <number>', 'Number of messages before and after to include (default: 3)', '3')
+  .action(async (postIdOrPermalink, opts) => {
+    const service = getService();
+    try {
+      const contextCount = parseInt(opts.context, 10);
+      const result = await service.getPostWithContext(postIdOrPermalink, isNaN(contextCount) ? 3 : contextCount);
+      if (program.opts().json) {
+        handleOutput(result, true);
+      } else {
+        console.log(`\n📌 Post View with Channel Context (${result.totalContextPosts} context posts)\n`);
+        if (result.before.length > 0) {
+          console.log('--- Previous Messages ---');
+          result.before.forEach((p) => {
+            const author = p.username ? `@${p.username}` : p.userId;
+            const time = ThreadService.formatRelativeTime(p.createAt);
+            console.log(`[${time}] ${author}: ${p.message}`);
+          });
+          console.log('');
+        }
+
+        console.log('>>> TARGET POST <<<');
+        const targetAuthor = result.post.username ? `@${result.post.username}` : result.post.userId;
+        const targetTime = ThreadService.formatRelativeTime(result.post.createAt);
+        console.log(`ID:      ${result.post.id}`);
+        console.log(`Author:  ${targetAuthor}`);
+        console.log(`Time:    ${targetTime}`);
+        console.log(`Message:\n${result.post.message}\n`);
+
+        if (result.after.length > 0) {
+          console.log('--- Following Messages ---');
+          result.after.forEach((p) => {
+            const author = p.username ? `@${p.username}` : p.userId;
+            const time = ThreadService.formatRelativeTime(p.createAt);
+            console.log(`[${time}] ${author}: ${p.message}`);
+          });
+          console.log('');
+        }
+      }
+    } catch (err) {
+      handleError(err);
+    } finally {
+      await service.close();
+    }
+  });
+
+// user
+program
+  .command('user <usernameOrId>')
+  .description('Lookup user profile, roles, and position by username or user ID')
+  .action(async (usernameOrId) => {
+    const service = getService();
+    try {
+      const result = await service.getUser(usernameOrId);
+      if (program.opts().json) {
+        handleOutput(result, true);
+      } else {
+        console.log('\n👤 Mattermost User Profile');
+        console.log(`   ID:        ${result.id}`);
+        console.log(`   Username:  @${result.username}`);
+        if (result.firstName || result.lastName) {
+          console.log(`   Name:      ${[result.firstName, result.lastName].filter(Boolean).join(' ')}`);
+        }
+        if (result.nickname) console.log(`   Nickname:  ${result.nickname}`);
+        if (result.position) console.log(`   Position:  ${result.position}`);
+        if (result.email) console.log(`   Email:     ${result.email}`);
+        if (result.roles) console.log(`   Roles:     ${result.roles}`);
+        console.log('');
+      }
+    } catch (err) {
+      handleError(err);
+    } finally {
+      await service.close();
+    }
+  });
+
+// file
+program
+  .command('file <fileId>')
+  .description('Download an attachment file by file ID safely')
+  .option('-o, --output <dir>', 'Destination directory (defaults to ./data/downloads)')
+  .option('--max-size <bytes>', 'Maximum allowable file size in bytes (defaults to 50MB)')
+  .action(async (fileId, opts) => {
+    const service = getService();
+    try {
+      const maxSizeBytes = opts.maxSize ? parseInt(opts.maxSize, 10) : undefined;
+      const result = await service.downloadFile({
+        fileId,
+        outputDir: opts.output,
+        maxSizeBytes: isNaN(maxSizeBytes as any) ? undefined : maxSizeBytes,
+      });
+
+      if (program.opts().json) {
+        handleOutput(result, true);
+      } else {
+        console.log('\n📥 File Downloaded Successfully');
+        console.log(`   File ID:    ${result.fileId}`);
+        console.log(`   Filename:   ${result.filename}`);
+        console.log(`   MIME Type:  ${result.mimeType}`);
+        console.log(`   Size:       ${result.size} bytes (${(result.size / 1024).toFixed(1)} KB)`);
+        console.log(`   Saved Path: ${result.savedPath}`);
+        console.log('');
       }
     } catch (err) {
       handleError(err);

@@ -1,8 +1,24 @@
-import { Channel, EditMessageResult, Post, SendMessageResult, User } from '../../../domain/mattermost/entities';
+import * as path from 'path';
+import {
+  Channel,
+  EditMessageResult,
+  FileDownloadResult,
+  MentionsResult,
+  Post,
+  PostContextResult,
+  ReactionResult,
+  SearchPostsResult,
+  SendMessageResult,
+  ThreadViewResult,
+  UnreadSummaryResult,
+  User,
+  UserProfileResult,
+} from '../../../domain/mattermost/entities';
 import {
   MattermostAuthenticationError,
   MattermostError,
   MattermostIdentityMismatchError,
+  MattermostProviderError,
   MattermostValidationError,
 } from '../../../domain/mattermost/errors';
 import { MattermostProvider } from '../../../domain/mattermost/providers/mattermost-provider.interface';
@@ -13,13 +29,21 @@ import { formatMessageWithAttribution } from '../../../infrastructure/mattermost
 import { ThreadService } from '../../../infrastructure/mattermost/services/thread-service';
 import {
   ActionResult,
+  AddReactionAction,
   EditMessageAction,
   GetChannelAction,
+  GetFileAction,
+  GetMentionsAction,
+  GetPostAction,
+  GetThreadAction,
+  GetUserAction,
   MattermostAction,
   MattermostActionSchema,
   ReadChannelAction,
   ReplyToMessageAction,
+  SearchAction,
   SendMessageAction,
+  UnreadSummaryAction,
   WhoamiAction,
 } from '../dto/action-schemas';
 
@@ -103,6 +127,30 @@ export class ActionExecutor {
           break;
         case 'whoami':
           resultData = await this.handleWhoami(action);
+          break;
+        case 'get_thread':
+          resultData = await this.handleGetThread(action);
+          break;
+        case 'get_mentions':
+          resultData = await this.handleGetMentions(action);
+          break;
+        case 'search':
+          resultData = await this.handleSearch(action);
+          break;
+        case 'unread_summary':
+          resultData = await this.handleUnreadSummary(action);
+          break;
+        case 'get_post':
+          resultData = await this.handleGetPost(action);
+          break;
+        case 'get_user':
+          resultData = await this.handleGetUser(action);
+          break;
+        case 'get_file':
+          resultData = await this.handleGetFile(action);
+          break;
+        case 'add_reaction':
+          resultData = await this.handleAddReaction(action);
           break;
       }
 
@@ -297,4 +345,67 @@ export class ActionExecutor {
       from: action.from,
     });
   }
+
+  public async handleGetThread(action: GetThreadAction): Promise<ThreadViewResult> {
+    return this.threadService.getThreadView(action.permalinkOrId, { limit: action.limit });
+  }
+
+  public async handleGetMentions(action: GetMentionsAction): Promise<MentionsResult> {
+    return this.threadService.getMentions({
+      since: action.since,
+      limit: action.limit,
+      teamId: action.teamId,
+    });
+  }
+
+  public async handleSearch(action: SearchAction): Promise<SearchPostsResult> {
+    return this.threadService.searchPosts({
+      terms: action.terms,
+      from: action.from,
+      in: action.in,
+      after: action.after,
+      before: action.before,
+      limit: action.limit,
+      teamId: action.teamId,
+      isOrSearch: action.isOrSearch,
+    });
+  }
+
+  public async handleUnreadSummary(_action?: UnreadSummaryAction): Promise<UnreadSummaryResult> {
+    if (this.provider.getUnreadSummary) {
+      return this.provider.getUnreadSummary();
+    }
+    throw new MattermostProviderError('The configured provider does not support retrieving unread summaries.');
+  }
+
+  public async handleGetPost(action: GetPostAction): Promise<PostContextResult> {
+    return this.threadService.getPostWithContext(action.postIdOrPermalink, action.context);
+  }
+
+  public async handleGetUser(action: GetUserAction): Promise<UserProfileResult> {
+    if (this.provider.getUser) {
+      return this.provider.getUser(action.usernameOrId);
+    }
+    throw new MattermostProviderError('The configured provider does not support retrieving user profiles.');
+  }
+
+  public async handleGetFile(action: GetFileAction): Promise<FileDownloadResult> {
+    if (this.provider.downloadFile) {
+      const outputDir = action.outputDir || path.resolve(process.cwd(), 'data', 'downloads');
+      return this.provider.downloadFile(action.fileId, outputDir, action.maxSizeBytes);
+    }
+    throw new MattermostProviderError('The configured provider does not support downloading attachment files.');
+  }
+
+  public async handleAddReaction(action: AddReactionAction): Promise<ReactionResult> {
+    const postId = ThreadService.extractPostIdFromPermalink(action.postIdOrPermalink);
+    if (!postId) {
+      throw new MattermostValidationError(`Invalid post identifier or permalink: '${action.postIdOrPermalink}'`);
+    }
+    if (this.provider.addReaction) {
+      return this.provider.addReaction(postId, action.emojiName);
+    }
+    throw new MattermostProviderError('The configured provider does not support adding reactions.');
+  }
 }
+

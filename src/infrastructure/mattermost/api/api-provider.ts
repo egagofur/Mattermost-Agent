@@ -1,15 +1,28 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import {
   Channel,
   EditMessageInput,
   EditMessageResult,
+  FileDownloadResult,
   GetChannelInput,
   GetMessagesInput,
   Post,
+  ReactionResult,
   ReplyToMessageInput,
   SendMessageInput,
   SendMessageResult,
+  UnreadChannelSummary,
+  UnreadSummaryResult,
   User,
+  UserProfileResult,
 } from '../../../domain/mattermost/entities';
+import {
+  MattermostAuthenticationError,
+  MattermostAuthorizationError,
+  MattermostProviderError,
+  MattermostValidationError,
+} from '../../../domain/mattermost/errors';
 import { MattermostProvider } from '../../../domain/mattermost/providers/mattermost-provider.interface';
 import { MattermostApiClient, MattermostRawChannel, MattermostRawPost, MattermostRawUser } from './client';
 import { Logger, defaultLogger } from '../services/logger';
@@ -61,6 +74,20 @@ export class MattermostApiProvider implements MattermostProvider {
       type: raw.type,
       hashtags: raw.hashtags,
       props: raw.props,
+      fileIds: raw.file_ids,
+      files: raw.metadata?.files?.map((f) => ({
+        id: f.id,
+        name: f.name,
+        size: f.size,
+        mimeType: f.mime_type,
+        extension: f.extension,
+      })),
+      reactions: raw.metadata?.reactions?.map((r) => ({
+        userId: r.user_id,
+        postId: r.post_id,
+        emojiName: r.emoji_name,
+        createAt: r.create_at,
+      })),
     };
   }
 
@@ -173,5 +200,184 @@ export class MattermostApiProvider implements MattermostProvider {
       .map((id) => rawList.posts[id])
       .filter(Boolean)
       .map((p) => this.mapPost(p));
+  }
+
+  public async getPostThread(postId: string): Promise<{ order: string[]; posts: Record<string, Post> }> {
+    const rawList = await this.client.getPostThread(postId);
+    const posts: Record<string, Post> = {};
+    for (const [id, rawPost] of Object.entries(rawList.posts || {})) {
+      posts[id] = this.mapPost(rawPost);
+    }
+    return {
+      order: rawList.order || [],
+      posts,
+    };
+  }
+
+  public async searchPosts(terms: string, options?: { teamId?: string; isOrSearch?: boolean }): Promise<Post[]> {
+    const rawList = await this.client.searchPosts(terms, options?.teamId, options?.isOrSearch);
+    if (!rawList || !rawList.order || !rawList.posts) {
+      return [];
+    }
+    return rawList.order.map((id) => this.mapPost(rawList.posts[id])).filter(Boolean);
+  }
+
+  public async getUsersByIds(userIds: string[]): Promise<User[]> {
+    const rawUsers = await this.client.getUsersByIds(userIds);
+    return rawUsers.map((u) => this.mapUser(u));
+  }
+
+  public async getUnreadSummary(): Promise<UnreadSummaryResult> {
+    const teams = await this.client.getMyTeams();
+    const channels = await this.client.getMyChannels();
+
+    let allMembers: any[] = [];
+    const warnings: string[] = [];
+    let failedCount = 0;
+
+    for (const team of teams) {
+      try {
+        const members = await this.client.getChannelMembersForTeam(team.id);
+        allMembers.push(...members);
+      } catch (err) {
+        if (err instanceof MattermostAuthenticationError || err instanceof MattermostAuthorizationError) {
+          throw err;
+        }
+        failedCount++;
+        const teamName = team.display_name || team.name || team.id;
+        warnings.push(`Failed to fetch channel members for team '${teamName}': ${err instanceof Error ? err.message : String(err)}`);
+        this.logger.debug(`Could not fetch channel members for team ${team.id}`, { error: String(err) });
+      }
+    }
+
+    if (teams.length > 0 && failedCount === teams.length) {
+      throw new MattermostProviderError('Failed to fetch channel members across all teams.');
+    }
+
+    const unreads: UnreadChannelSummary[] = [];
+    for (const m of allMembers) {
+      const chan = channels.find((c) => c.id === m.channel_id);
+      if (chan) {
+        const unreadCount = Math.max(0, ((chan as any).total_msg_count || 0) - (m.msg_count || 0));
+        const mentionCount = m.mention_count || 0;
+        if (unreadCount > 0 || mentionCount > 0) {
+          unreads.push({
+            channelId: chan.id,
+            channelName: chan.name,
+            displayName: chan.display_name || chan.name,
+            type: chan.type,
+            teamId: chan.team_id,
+            unreadCount,
+            mentionCount,
+            hasMention: mentionCount > 0,
+          });
+        }
+      }
+    }
+
+    unreads.sort((a, b) => {
+      if (a.hasMention !== b.hasMention) return a.hasMention ? -1 : 1;
+      if (b.mentionCount !== a.mentionCount) return b.mentionCount - a.mentionCount;
+      return b.unreadCount - a.unreadCount;
+    });
+
+    return {
+      totalUnreadChannels: unreads.length,
+      channels: unreads,
+      warnings: warnings.length > 0 ? warnings : undefined,
+    };
+  }
+
+  public async getPost(postId: string): Promise<Post> {
+    const rawPost = await this.client.getPost(postId);
+    return this.mapPost(rawPost);
+  }
+
+  public async getChannelPosts(
+    channelId: string,
+    options: { before?: string; after?: string; limit?: number }
+  ): Promise<Post[]> {
+    const rawList = await this.client.getChannelPostsContext(channelId, {
+      before: options.before,
+      after: options.after,
+      perPage: options.limit,
+    });
+    if (!rawList || !rawList.order || !rawList.posts) {
+      return [];
+    }
+    return rawList.order.map((id) => this.mapPost(rawList.posts[id])).filter(Boolean);
+  }
+
+  public async getUser(usernameOrId: string): Promise<UserProfileResult> {
+    const rawUser = await this.client.getUser(usernameOrId);
+    return {
+      id: rawUser.id,
+      username: rawUser.username,
+      email: rawUser.email,
+      firstName: rawUser.first_name,
+      lastName: rawUser.last_name,
+      nickname: rawUser.nickname,
+      position: rawUser.position,
+      roles: rawUser.roles,
+      createAt: rawUser.create_at,
+    };
+  }
+
+  public async downloadFile(fileId: string, outputDir: string, maxSizeBytes?: number): Promise<FileDownloadResult> {
+    const cleanId = fileId.trim();
+    if (!/^[a-z0-9]{26}$/i.test(cleanId)) {
+      throw new MattermostValidationError(`Invalid file ID '${fileId}'. Expected 26-character alphanumeric string.`);
+    }
+
+    const info = await this.client.getFileInfo(cleanId);
+    if (!info) {
+      throw new MattermostValidationError(`File with ID '${cleanId}' not found.`);
+    }
+
+    const maxLimit = maxSizeBytes ?? 50 * 1024 * 1024;
+    if (info.size && info.size > maxLimit) {
+      throw new MattermostValidationError(
+        `File size (${info.size} bytes) exceeds maximum allowed limit of ${maxLimit} bytes.`
+      );
+    }
+
+    const rawName = info.name || `file_${cleanId}`;
+    const safeName = path.basename(rawName).replace(/[/\\?%*:|"<>]/g, '_');
+    const resolvedDir = path.resolve(outputDir);
+    if (!fs.existsSync(resolvedDir)) {
+      fs.mkdirSync(resolvedDir, { recursive: true });
+    }
+    const finalPath = path.resolve(resolvedDir, safeName);
+    if (!finalPath.startsWith(resolvedDir)) {
+      throw new MattermostValidationError('Path traversal attempt detected in filename.');
+    }
+
+    const buffer = await this.client.downloadFileData(cleanId);
+    if (buffer.length > maxLimit) {
+      throw new MattermostValidationError(
+        `Downloaded file size (${buffer.length} bytes) exceeds maximum allowed limit of ${maxLimit} bytes.`
+      );
+    }
+
+    fs.writeFileSync(finalPath, buffer);
+    return {
+      fileId: cleanId,
+      filename: safeName,
+      mimeType: info.mime_type || 'application/octet-stream',
+      size: buffer.length,
+      savedPath: finalPath,
+    };
+  }
+
+  public async addReaction(postId: string, emojiName: string): Promise<ReactionResult> {
+    const me = await this.getMe();
+    const cleanEmoji = emojiName.trim().replace(/^:|:$/g, '');
+    const raw = await this.client.addReaction(me.id, postId, cleanEmoji);
+    return {
+      userId: raw.user_id,
+      postId: raw.post_id,
+      emojiName: raw.emoji_name,
+      createAt: raw.create_at || Date.now(),
+    };
   }
 }

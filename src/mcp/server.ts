@@ -7,7 +7,10 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { MattermostAutomationService } from '../application/mattermost/services/automation-service';
 import { loadConfig } from '../config/env';
-import { ChannelConfigLoader } from '../infrastructure/mattermost/services/channel-config-loader';
+import {
+  ChannelConfigLoader,
+  NormalizedChannelMapping,
+} from '../infrastructure/mattermost/services/channel-config-loader';
 import { ThreadService } from '../infrastructure/mattermost/services/thread-service';
 
 export function createMattermostMcpServer(service?: MattermostAutomationService): Server {
@@ -71,7 +74,7 @@ export function createMattermostMcpServer(service?: MattermostAutomationService)
     },
     {
       name: 'mattermost_send_message',
-      description: 'Send a message to a Mattermost channel under your personal account.',
+      description: 'Send a message to a Mattermost channel under your personal account. Requires approved: true to actually send.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -91,13 +94,17 @@ export function createMattermostMcpServer(service?: MattermostAutomationService)
             type: 'string',
             description: 'Optional Root Post ID if replying to a thread.',
           },
+          approved: {
+            type: 'boolean',
+            description: 'Must be set to true to actually execute this write action. If false or omitted, the server returns a safety draft preview without sending.',
+          },
         },
         required: ['channel', 'message'],
       },
     },
     {
       name: 'mattermost_reply_thread',
-      description: 'Reply to an existing thread in a Mattermost channel. Supports shortcut numbers (:1, :latest), keyword search, permalinks, or post ID.',
+      description: 'Reply to an existing thread in a Mattermost channel. Supports shortcut numbers (:1, :latest), keyword search, permalinks, or post ID. Requires approved: true to actually send.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -121,13 +128,17 @@ export function createMattermostMcpServer(service?: MattermostAutomationService)
             type: 'string',
             description: 'Optional sender attribution label (e.g. "AI", "Agent").',
           },
+          approved: {
+            type: 'boolean',
+            description: 'Must be set to true to actually execute this write action. If false or omitted, the server returns a safety draft preview without sending.',
+          },
         },
         required: ['channel', 'message'],
       },
     },
     {
       name: 'mattermost_edit_message',
-      description: 'Edit an existing post/message in Mattermost by post ID or permalink URL.',
+      description: 'Edit an existing post/message in Mattermost by post ID or permalink URL. Requires approved: true to actually edit.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -142,6 +153,10 @@ export function createMattermostMcpServer(service?: MattermostAutomationService)
           from: {
             type: 'string',
             description: 'Optional sender attribution label (e.g. "AI", "AI Agent").',
+          },
+          approved: {
+            type: 'boolean',
+            description: 'Must be set to true to actually execute this write action. If false or omitted, the server returns a safety draft preview without modifying.',
           },
         },
         required: ['postId', 'message'],
@@ -218,6 +233,166 @@ export function createMattermostMcpServer(service?: MattermostAutomationService)
         required: ['jobName', 'enabled'],
       },
     },
+    {
+      name: 'mattermost_get_thread',
+      description: 'Retrieve the complete sequential message thread for a given post permalink URL or 26-character post ID, including user IDs, resolved usernames, timestamps, message content, attachments summary, and reactions.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          permalinkOrId: {
+            type: 'string',
+            description: 'Permalink URL (e.g. https://mattermost.com/.../pl/postid) or 26-character alphanumeric Post ID.',
+          },
+          limit: {
+            type: 'number',
+            description: 'Maximum number of posts to return (default: 200). Returns truncated: true if more posts exist.',
+          },
+        },
+        required: ['permalinkOrId'],
+      },
+    },
+    {
+      name: 'mattermost_get_mentions',
+      description: 'Retrieve recent posts mentioning the authenticated user, including user IDs, usernames, timestamps, message snippets, and whether you have already replied in the thread.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          since: {
+            type: 'number',
+            description: 'Optional timestamp in milliseconds to filter mentions after (default: last 24 hours).',
+          },
+          limit: {
+            type: 'number',
+            description: 'Maximum number of mentions to return (default: 50).',
+          },
+          teamId: {
+            type: 'string',
+            description: 'Optional team ID to restrict search.',
+          },
+        },
+      },
+    },
+    {
+      name: 'mattermost_search',
+      description: 'Search messages across accessible Mattermost channels with optional filters for user, channel, dates, and query terms.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          terms: {
+            type: 'string',
+            description: 'Keywords to search for.',
+          },
+          from: {
+            type: 'string',
+            description: 'Filter posts from a specific username (with or without @).',
+          },
+          in: {
+            type: 'string',
+            description: 'Filter posts in a specific channel name (with or without ~).',
+          },
+          after: {
+            type: 'string',
+            description: 'Filter posts after date (YYYY-MM-DD).',
+          },
+          before: {
+            type: 'string',
+            description: 'Filter posts before date (YYYY-MM-DD).',
+          },
+          limit: {
+            type: 'number',
+            description: 'Maximum number of search results to return (default: 20).',
+          },
+          teamId: {
+            type: 'string',
+            description: 'Optional team ID to restrict search.',
+          },
+        },
+      },
+    },
+    {
+      name: 'mattermost_unread_summary',
+      description: 'Retrieve summary of all channels with unread messages or mentions for your account, prioritized by mentions.',
+      inputSchema: {
+        type: 'object',
+        properties: {},
+      },
+    },
+    {
+      name: 'mattermost_get_post',
+      description: 'Retrieve a single post along with its surrounding contextual messages (before and after) in the same channel.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          postIdOrPermalink: {
+            type: 'string',
+            description: 'Post 26-character ID or permalink URL.',
+          },
+          context: {
+            type: 'number',
+            description: 'Number of surrounding context posts to retrieve before and after (default: 3).',
+          },
+        },
+        required: ['postIdOrPermalink'],
+      },
+    },
+    {
+      name: 'mattermost_get_user',
+      description: 'Retrieve user profile details (username, full name, email, position, roles) by username or 26-character user ID.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          usernameOrId: {
+            type: 'string',
+            description: 'Mattermost username (with or without @) or 26-character user ID.',
+          },
+        },
+        required: ['usernameOrId'],
+      },
+    },
+    {
+      name: 'mattermost_get_file',
+      description: 'Download an attachment file from Mattermost by file ID into a local directory safely.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          fileId: {
+            type: 'string',
+            description: 'Mattermost 26-character file ID.',
+          },
+          outputDir: {
+            type: 'string',
+            description: 'Optional local destination directory (defaults to ./data/downloads).',
+          },
+          maxSizeBytes: {
+            type: 'number',
+            description: 'Maximum allowable file size in bytes (defaults to 52428800 / 50MB).',
+          },
+        },
+        required: ['fileId'],
+      },
+    },
+    {
+      name: 'mattermost_add_reaction',
+      description: 'Add an emoji reaction to a post by post ID or permalink URL. Requires approved: true to actually react.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          postIdOrPermalink: {
+            type: 'string',
+            description: 'Post 26-character ID or permalink URL to react to.',
+          },
+          emojiName: {
+            type: 'string',
+            description: 'Emoji name to react with (e.g. "thumbsup", "eyes", "white_check_mark", without colons).',
+          },
+          approved: {
+            type: 'boolean',
+            description: 'Must be set to true to actually execute this write action. If false or omitted, the server returns a safety draft preview without reacting.',
+          },
+        },
+        required: ['postIdOrPermalink', 'emojiName'],
+      },
+    },
   ];
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -256,13 +431,16 @@ export function createMattermostMcpServer(service?: MattermostAutomationService)
 
         case 'mattermost_list_channels': {
           const query = typeof args.query === 'string' ? args.query.toLowerCase() : undefined;
-          const configLoader = new ChannelConfigLoader();
+          const configLoader = automationService.getChannelResolver().getConfigLoader();
+
+          // Surface explicit error when 0 channels are configured/found instead of silent empty list
+          configLoader.assertHasChannels();
           const mappings = configLoader.getAllMappings();
 
           let filtered = mappings;
           if (query) {
             filtered = mappings.filter(
-              (m) =>
+              (m: NormalizedChannelMapping) =>
                 m.alias.toLowerCase().includes(query) ||
                 m.channel.toLowerCase().includes(query) ||
                 (m.description && m.description.toLowerCase().includes(query)) ||
@@ -277,7 +455,7 @@ export function createMattermostMcpServer(service?: MattermostAutomationService)
                 text: JSON.stringify(
                   {
                     total: filtered.length,
-                    channels: filtered.map((c) => ({
+                    channels: filtered.map((c: NormalizedChannelMapping) => ({
                       alias: c.alias,
                       channel: c.channel,
                       team: c.team,
@@ -342,6 +520,33 @@ export function createMattermostMcpServer(service?: MattermostAutomationService)
           const from = typeof args.from === 'string' ? args.from : undefined;
           const rootId = typeof args.rootId === 'string' ? args.rootId : undefined;
 
+          if (args.approved !== true) {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify(
+                    {
+                      status: 'draft_preview',
+                      requiresApproval: true,
+                      action: 'send_message',
+                      preview: {
+                        channel,
+                        message,
+                        from,
+                        rootId,
+                      },
+                      warning:
+                        "Action was NOT executed because 'approved: true' was not provided. Review this preview and call again with 'approved: true' to confirm execution.",
+                    },
+                    null,
+                    2
+                  ),
+                },
+              ],
+            };
+          }
+
           const result = await automationService.sendMessage({
             channel,
             message,
@@ -384,6 +589,34 @@ export function createMattermostMcpServer(service?: MattermostAutomationService)
             rootId = ':1'; // Default to most recent thread if none specified
           }
 
+          if (args.approved !== true) {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify(
+                    {
+                      status: 'draft_preview',
+                      requiresApproval: true,
+                      action: 'reply_thread',
+                      preview: {
+                        channel,
+                        rootId,
+                        find: args.find,
+                        message,
+                        from,
+                      },
+                      warning:
+                        "Action was NOT executed because 'approved: true' was not provided. Review this preview and call again with 'approved: true' to confirm execution.",
+                    },
+                    null,
+                    2
+                  ),
+                },
+              ],
+            };
+          }
+
           const result = await automationService.replyToMessage({
             channel,
             rootId,
@@ -415,6 +648,32 @@ export function createMattermostMcpServer(service?: MattermostAutomationService)
           const postId = String(args.postId);
           const message = String(args.message);
           const from = typeof args.from === 'string' ? args.from : undefined;
+
+          if (args.approved !== true) {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify(
+                    {
+                      status: 'draft_preview',
+                      requiresApproval: true,
+                      action: 'edit_message',
+                      preview: {
+                        postId,
+                        message,
+                        from,
+                      },
+                      warning:
+                        "Action was NOT executed because 'approved: true' was not provided. Review this preview and call again with 'approved: true' to confirm execution.",
+                    },
+                    null,
+                    2
+                  ),
+                },
+              ],
+            };
+          }
 
           const actionResult = await automationService.executeAction({
             action: 'edit_message',
@@ -506,6 +765,8 @@ export function createMattermostMcpServer(service?: MattermostAutomationService)
 
         case 'mattermost_list_cron_jobs': {
           const query = typeof args.query === 'string' ? args.query.toLowerCase() : undefined;
+          const cronLoader = automationService.getCronScheduler().getConfigLoader();
+          const warning = cronLoader.getLoadWarning();
           const jobs = automationService.listCronJobs();
 
           let filtered = jobs;
@@ -525,6 +786,7 @@ export function createMattermostMcpServer(service?: MattermostAutomationService)
                 text: JSON.stringify(
                   {
                     total: filtered.length,
+                    warning: warning && filtered.length === 0 ? warning : undefined,
                     jobs: filtered,
                   },
                   null,
@@ -595,6 +857,184 @@ export function createMattermostMcpServer(service?: MattermostAutomationService)
                     success: true,
                     jobName,
                     enabled,
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        }
+
+        case 'mattermost_get_thread': {
+          const permalinkOrId = String(args.permalinkOrId || args.postId || '');
+          const limit = typeof args.limit === 'number' ? args.limit : undefined;
+
+          const result = await automationService.getThread(permalinkOrId, limit);
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(result, null, 2),
+              },
+            ],
+          };
+        }
+
+        case 'mattermost_get_mentions': {
+          const since = typeof args.since === 'number' ? args.since : undefined;
+          const limit = typeof args.limit === 'number' ? args.limit : undefined;
+          const teamId = typeof args.teamId === 'string' ? args.teamId : undefined;
+
+          const result = await automationService.getMentions({ since, limit, teamId });
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(result, null, 2),
+              },
+            ],
+          };
+        }
+
+        case 'mattermost_search': {
+          const terms = typeof args.terms === 'string' ? args.terms : undefined;
+          const from = typeof args.from === 'string' ? args.from : undefined;
+          const inChannel = typeof args.in === 'string' ? args.in : undefined;
+          const after = typeof args.after === 'string' ? args.after : undefined;
+          const before = typeof args.before === 'string' ? args.before : undefined;
+          const limit = typeof args.limit === 'number' ? args.limit : undefined;
+          const teamId = typeof args.teamId === 'string' ? args.teamId : undefined;
+
+          const result = await automationService.search({
+            terms,
+            from,
+            in: inChannel,
+            after,
+            before,
+            limit,
+            teamId,
+          });
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(result, null, 2),
+              },
+            ],
+          };
+        }
+
+        case 'mattermost_unread_summary': {
+          const result = await automationService.getUnreadSummary();
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(result, null, 2),
+              },
+            ],
+          };
+        }
+
+        case 'mattermost_get_post': {
+          const postIdOrPermalink = typeof args.postIdOrPermalink === 'string' ? args.postIdOrPermalink : '';
+          const context = typeof args.context === 'number' ? args.context : undefined;
+
+          const result = await automationService.getPostWithContext(postIdOrPermalink, context);
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(result, null, 2),
+              },
+            ],
+          };
+        }
+
+        case 'mattermost_get_user': {
+          const usernameOrId = typeof args.usernameOrId === 'string' ? args.usernameOrId : '';
+
+          const result = await automationService.getUser(usernameOrId);
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(result, null, 2),
+              },
+            ],
+          };
+        }
+
+        case 'mattermost_get_file': {
+          const fileId = typeof args.fileId === 'string' ? args.fileId : '';
+          const outputDir = typeof args.outputDir === 'string' ? args.outputDir : undefined;
+          const maxSizeBytes = typeof args.maxSizeBytes === 'number' ? args.maxSizeBytes : undefined;
+
+          const result = await automationService.downloadFile({
+            fileId,
+            outputDir,
+            maxSizeBytes,
+          });
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(result, null, 2),
+              },
+            ],
+          };
+        }
+
+        case 'mattermost_add_reaction': {
+          const postIdOrPermalink = String(args.postIdOrPermalink);
+          const emojiName = String(args.emojiName);
+
+          if (args.approved !== true) {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify(
+                    {
+                      status: 'draft_preview',
+                      requiresApproval: true,
+                      action: 'add_reaction',
+                      preview: {
+                        postIdOrPermalink,
+                        emojiName,
+                      },
+                      warning:
+                        "Action was NOT executed because 'approved: true' was not provided. Review this preview and call again with 'approved: true' to confirm execution.",
+                    },
+                    null,
+                    2
+                  ),
+                },
+              ],
+            };
+          }
+
+          const result = await automationService.addReaction(postIdOrPermalink, emojiName);
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(
+                  {
+                    success: true,
+                    userId: result.userId,
+                    postId: result.postId,
+                    emojiName: result.emojiName,
+                    createAt: result.createAt,
                   },
                   null,
                   2

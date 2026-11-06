@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as YAML from 'yaml';
 import { z } from 'zod';
 import { MattermostValidationError } from '../../../domain/mattermost/errors';
+import { getPackageRoot, resolveAppPath, resolveConfigFile } from '../../../config/paths';
 import { Logger, defaultLogger } from './logger';
 
 export const ChannelDefinitionObjectSchema = z.object({
@@ -53,11 +54,14 @@ export interface ChannelConfigLoaderOptions {
 
 export class ChannelConfigLoader {
   private configPath?: string;
+  private loadedPath?: string;
   private envName?: string;
   private logger: Logger;
   private defaultTeam?: string;
   private fallbackChannel?: string;
   private mappings = new Map<string, NormalizedChannelMapping>();
+  private searchedLocations: string[] = [];
+  private loadWarning?: string;
 
   private static readonly DEFAULT_CONFIG_LOCATIONS = [
     'channels.yml',
@@ -145,7 +149,25 @@ export class ChannelConfigLoader {
   }
 
   public loadFromFile(filePath: string): boolean {
-    const resolvedPath = path.resolve(process.cwd(), filePath);
+    let resolvedPath = filePath;
+    if (!path.isAbsolute(resolvedPath)) {
+      const inCwd = path.resolve(process.cwd(), filePath);
+      if (fs.existsSync(inCwd)) {
+        resolvedPath = inCwd;
+      } else {
+        const inPkg = path.resolve(getPackageRoot(), filePath);
+        if (fs.existsSync(inPkg)) {
+          resolvedPath = inPkg;
+        } else {
+          resolvedPath = inCwd;
+        }
+      }
+    }
+
+    if (!this.searchedLocations.includes(resolvedPath)) {
+      this.searchedLocations.push(resolvedPath);
+    }
+
     if (!fs.existsSync(resolvedPath)) {
       return false;
     }
@@ -154,6 +176,7 @@ export class ChannelConfigLoader {
       const content = fs.readFileSync(resolvedPath, 'utf-8');
       this.parseAndApply(content);
       this.configPath = resolvedPath;
+      this.loadedPath = resolvedPath;
       this.logger.debug(`Loaded YAML channel mapping from '${resolvedPath}' (${this.mappings.size} mappings)`);
       return true;
     } catch (err) {
@@ -167,24 +190,20 @@ export class ChannelConfigLoader {
   }
 
   private autoLoad(): void {
-    if (this.configPath) {
-      this.loadFromFile(this.configPath);
+    const resolution = resolveConfigFile(
+      ChannelConfigLoader.DEFAULT_CONFIG_LOCATIONS,
+      this.configPath,
+      'MATTERMOST_CHANNELS_CONFIG'
+    );
+    this.searchedLocations = resolution.searchedLocations;
+
+    if (resolution.resolvedPath) {
+      this.loadFromFile(resolution.resolvedPath);
       return;
     }
 
-    // Check env var
-    const envPath = process.env.MATTERMOST_CHANNELS_CONFIG;
-    if (envPath) {
-      this.loadFromFile(envPath);
-      return;
-    }
-
-    // Check default locations
-    for (const relativePath of ChannelConfigLoader.DEFAULT_CONFIG_LOCATIONS) {
-      if (this.loadFromFile(relativePath)) {
-        return;
-      }
-    }
+    this.loadWarning = `channels.yml was not found in searched locations: [${this.searchedLocations.join(', ')}]`;
+    this.logger.warn(this.loadWarning);
   }
 
   public getMapping(alias: string): NormalizedChannelMapping | undefined {
@@ -193,6 +212,31 @@ export class ChannelConfigLoader {
 
   public getAllMappings(): NormalizedChannelMapping[] {
     return Array.from(this.mappings.values());
+  }
+
+  public getLoadedPath(): string | undefined {
+    return this.loadedPath;
+  }
+
+  public getSearchedLocations(): string[] {
+    return [...this.searchedLocations];
+  }
+
+  public getLoadWarning(): string | undefined {
+    return this.loadWarning;
+  }
+
+  public assertHasChannels(contextHint?: string): void {
+    if (this.mappings.size === 0) {
+      const hint = contextHint ? ` (${contextHint})` : '';
+      const searched =
+        this.searchedLocations.length > 0
+          ? ` Searched locations: [${this.searchedLocations.join(', ')}].`
+          : '';
+      throw new MattermostValidationError(
+        `No configured channels found in channels.yml${hint}.${searched} Please run "npm run cli -- sync" or invoke "mattermost_sync_channels" to auto-discover accessible channels.`
+      );
+    }
   }
 
   public getDefaultTeam(): string | undefined {
@@ -216,7 +260,7 @@ export class ChannelConfigLoader {
   }
 
   public getConfigPath(): string | undefined {
-    return this.configPath;
+    return this.configPath || this.loadedPath;
   }
 
   public toggleChannel(alias: string, enabled: boolean): boolean {
@@ -228,7 +272,7 @@ export class ChannelConfigLoader {
     mapping.enabled = enabled;
     this.mappings.set(clean, mapping);
 
-    const targetPath = this.configPath || 'channels.yml';
+    const targetPath = this.loadedPath || this.configPath || resolveAppPath('channels.yml');
     this.saveToFile(targetPath);
     return true;
   }

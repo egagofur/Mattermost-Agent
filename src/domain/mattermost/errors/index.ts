@@ -8,6 +8,8 @@ export function sanitizeSecret(input: string): string {
     .replace(/(MATTERMOST_TOKEN\s*=\s*)([^\s]+)/gi, '$1[REDACTED]')
     .replace(/(token\s*[:=]\s*)(["']?)[A-Za-z0-9_-]+(["']?)/gi, '$1[REDACTED]')
     .replace(/(MMAUTHTOKEN\s*=\s*)([A-Za-z0-9_-]+)/gi, '$1[REDACTED]')
+    .replace(/(MMCSRF\s*=\s*)([A-Za-z0-9_-]+)/gi, '$1[REDACTED]')
+    .replace(/(X-CSRF-Token\s*[:=]\s*)([^\s]+)/gi, '$1[REDACTED]')
     .replace(/(password\s*[:=]\s*)(["']?)[^\s"',]+(["']?)/gi, '$1[REDACTED]');
 }
 
@@ -39,7 +41,11 @@ export class MattermostError extends Error {
 }
 
 export class MattermostAuthenticationError extends MattermostError {
-  constructor(message = 'Mattermost authentication failed or session expired.', details?: Record<string, unknown>, cause?: unknown) {
+  constructor(
+    message = 'Mattermost authentication failed or session expired. Please log in using "npm run cli -- login".',
+    details?: Record<string, unknown>,
+    cause?: unknown
+  ) {
     super(message, {
       code: 'AUTHENTICATION_FAILED',
       statusCode: 401,

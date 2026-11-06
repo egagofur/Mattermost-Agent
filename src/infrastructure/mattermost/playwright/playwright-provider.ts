@@ -1,16 +1,28 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import {
   Channel,
   EditMessageInput,
   EditMessageResult,
+  FileDownloadResult,
   GetChannelInput,
   GetMessagesInput,
   Post,
+  ReactionResult,
   ReplyToMessageInput,
   SendMessageInput,
   SendMessageResult,
+  UnreadSummaryResult,
   User,
+  UserProfileResult,
 } from '../../../domain/mattermost/entities';
-import { MattermostAuthenticationError, MattermostProviderError } from '../../../domain/mattermost/errors';
+import {
+  MattermostAuthenticationError,
+  MattermostAuthorizationError,
+  MattermostChannelNotFoundError,
+  MattermostProviderError,
+  MattermostValidationError,
+} from '../../../domain/mattermost/errors';
 import { MattermostProvider } from '../../../domain/mattermost/providers/mattermost-provider.interface';
 import { Logger, defaultLogger } from '../services/logger';
 import { MattermostChannelPage } from './page-objects/channel-page';
@@ -56,35 +68,53 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
     await this.ensureAuthenticated();
     const page = await this.webClient.getPage();
 
+    let rawUser: any;
     try {
-      const rawUser = await page.evaluate(async () => {
-        const res = await fetch('/api/v4/users/me', { credentials: 'include' });
-        if (res.ok) {
-          return res.json();
-        }
-        return null;
-      });
-
-      if (rawUser && rawUser.id) {
-        return {
-          id: rawUser.id,
-          username: rawUser.username,
-          email: rawUser.email,
-          firstName: rawUser.first_name,
-          lastName: rawUser.last_name,
-          nickname: rawUser.nickname,
-          roles: rawUser.roles,
-          createAt: rawUser.create_at,
+      rawUser = await page.evaluate(async () => {
+        const cookieMatch = document.cookie.match(/(?:^|;\s*)MMCSRF=([^;]*)/);
+        const csrfToken = cookieMatch ? decodeURIComponent(cookieMatch[1]) : '';
+        const headers: Record<string, string> = {
+          'X-Requested-With': 'XMLHttpRequest',
         };
+        if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+
+        const res = await fetch('/api/v4/users/me', { headers, credentials: 'include' });
+        if (res.status === 401 || res.status === 403) {
+          throw new Error(`AUTH_${res.status}: Authentication failed`);
+        }
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+        }
+        return res.json();
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('AUTH_401') || msg.includes('401')) {
+        throw new MattermostAuthenticationError(
+          'Mattermost authentication failed or session expired. Please log in using "npm run cli -- login".'
+        );
       }
-    } catch {
-      // Fallback
+      if (msg.includes('AUTH_403') || msg.includes('403')) {
+        throw new MattermostAuthorizationError('Mattermost authorization failed. Insufficient permissions.');
+      }
+      throw new MattermostProviderError(`Failed to fetch authenticated user profile: ${msg}`);
+    }
+
+    if (!rawUser || !rawUser.id) {
+      throw new MattermostAuthenticationError(
+        'Mattermost authentication failed: invalid user payload returned from session. Please log in using "npm run cli -- login".'
+      );
     }
 
     return {
-      id: 'browser-authenticated-user',
-      username: 'personal-account',
-      roles: 'system_user',
+      id: rawUser.id,
+      username: rawUser.username || 'personal-account',
+      email: rawUser.email,
+      firstName: rawUser.first_name,
+      lastName: rawUser.last_name,
+      nickname: rawUser.nickname,
+      roles: rawUser.roles || 'system_user',
+      createAt: rawUser.create_at,
     };
   }
 
@@ -127,7 +157,10 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
     }
 
     const channelPage = new MattermostChannelPage(page, this.baseUrl, this.logger);
-    const channelIdentifier = input.channelName || input.channelId || 'town-square';
+    const channelIdentifier = input.channelName || input.channelId;
+    if (!channelIdentifier) {
+      throw new MattermostChannelNotFoundError('unknown', { reason: 'No channel name or channel ID provided.' });
+    }
     await channelPage.navigateToChannel(channelIdentifier, input.teamId || this.defaultTeamName);
     const title = await channelPage.getChannelTitle();
 
@@ -147,17 +180,23 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
     try {
       this.logger.debug('Discovering channels via in-browser authenticated session...');
       const apiChannels = await page.evaluate(async (targetTeamId) => {
+        const cookieMatch = document.cookie.match(/(?:^|;\s*)MMCSRF=([^;]*)/);
+        const csrfToken = cookieMatch ? decodeURIComponent(cookieMatch[1]) : '';
+        const headers: Record<string, string> = {
+          'X-Requested-With': 'XMLHttpRequest',
+        };
+        if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+
         let teams: Array<{ id: string; name: string }> = [];
 
         if (targetTeamId) {
           teams = [{ id: targetTeamId, name: targetTeamId }];
         } else {
-          try {
-            const teamsRes = await fetch('/api/v4/users/me/teams', { credentials: 'include' });
-            if (teamsRes.ok) {
-              teams = await teamsRes.json();
-            }
-          } catch {}
+          const teamsRes = await fetch('/api/v4/users/me/teams', { headers, credentials: 'include' });
+          if (teamsRes.status === 401 || teamsRes.status === 403) throw new Error(`AUTH_${teamsRes.status}`);
+          if (teamsRes.ok) {
+            teams = await teamsRes.json();
+          }
         }
 
         const allChannels: Array<{
@@ -172,26 +211,24 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
 
         if (Array.isArray(teams) && teams.length > 0) {
           for (const team of teams) {
-            try {
-              const res = await fetch(`/api/v4/users/me/teams/${team.id}/channels`, { credentials: 'include' });
-              if (res.ok) {
-                const list = await res.json();
-                if (Array.isArray(list)) {
-                  allChannels.push(...list);
-                }
-              }
-            } catch {}
-          }
-        } else {
-          try {
-            const res = await fetch('/api/v4/users/me/channels', { credentials: 'include' });
+            const res = await fetch(`/api/v4/users/me/teams/${team.id}/channels`, { headers, credentials: 'include' });
+            if (res.status === 401 || res.status === 403) throw new Error(`AUTH_${res.status}`);
             if (res.ok) {
               const list = await res.json();
               if (Array.isArray(list)) {
                 allChannels.push(...list);
               }
             }
-          } catch {}
+          }
+        } else {
+          const res = await fetch('/api/v4/users/me/channels', { headers, credentials: 'include' });
+          if (res.status === 401 || res.status === 403) throw new Error(`AUTH_${res.status}`);
+          if (res.ok) {
+            const list = await res.json();
+            if (Array.isArray(list)) {
+              allChannels.push(...list);
+            }
+          }
         }
 
         return allChannels;
@@ -216,6 +253,15 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
         }
       }
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('AUTH_401') || msg.includes('401')) {
+        throw new MattermostAuthenticationError(
+          'Mattermost authentication failed or session expired. Please log in using "npm run cli -- login".'
+        );
+      }
+      if (msg.includes('AUTH_403') || msg.includes('403')) {
+        throw new MattermostAuthorizationError('Mattermost authorization failed. Insufficient permissions.');
+      }
       this.logger.debug('In-browser fetch discovery failed, falling back to DOM scraping', {
         error: String(err),
       });
@@ -246,13 +292,6 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
       }
     }
 
-    if (channels.length === 0) {
-      channels.push(
-        { id: 'town-square', name: 'town-square', displayName: 'Town Square', type: 'O' },
-        { id: 'off-topic', name: 'off-topic', displayName: 'Off-Topic', type: 'O' }
-      );
-    }
-
     return channels;
   }
 
@@ -265,13 +304,21 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
       this.logger.debug(`Playwright: Posting message to channel '${input.channelId}' via session API...`);
       const rawPost = await page.evaluate(
         async ({ channelId, message, rootId }) => {
+          const cookieMatch = document.cookie.match(/(?:^|;\s*)MMCSRF=([^;]*)/);
+          const csrfToken = cookieMatch ? decodeURIComponent(cookieMatch[1]) : '';
+
+          const headers: Record<string, string> = {
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest',
+          };
+          if (csrfToken) {
+            headers['X-CSRF-Token'] = csrfToken;
+          }
+
           const res = await fetch('/api/v4/posts', {
             method: 'POST',
             credentials: 'include',
-            headers: {
-              'Content-Type': 'application/json',
-              'X-Requested-With': 'XMLHttpRequest',
-            },
+            headers,
             body: JSON.stringify({
               channel_id: channelId,
               message,
@@ -339,13 +386,8 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
       this.logger.debug(`Playwright: Patching post '${input.postId}' via session API...`);
       const rawPost = await page.evaluate(
         async ({ postId, message }) => {
-          const getCookie = (name: string) => {
-            const value = `; ${document.cookie}`;
-            const parts = value.split(`; ${name}=`);
-            if (parts.length === 2) return parts.pop()?.split(';').shift();
-            return '';
-          };
-          const csrfToken = getCookie('MMCSRF');
+          const cookieMatch = document.cookie.match(/(?:^|;\s*)MMCSRF=([^;]*)/);
+          const csrfToken = cookieMatch ? decodeURIComponent(cookieMatch[1]) : '';
 
           const headers: Record<string, string> = {
             'Content-Type': 'application/json',
@@ -442,6 +484,13 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
     try {
       const rawList = await page.evaluate(
         async ({ channelId, limit, since }) => {
+          const cookieMatch = document.cookie.match(/(?:^|;\s*)MMCSRF=([^;]*)/);
+          const csrfToken = cookieMatch ? decodeURIComponent(cookieMatch[1]) : '';
+          const headers: Record<string, string> = {
+            'X-Requested-With': 'XMLHttpRequest',
+          };
+          if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+
           const params = new URLSearchParams({
             page: '0',
             per_page: (limit || 30).toString(),
@@ -449,8 +498,10 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
           if (since) params.set('since', since.toString());
 
           const res = await fetch(`/api/v4/channels/${channelId}/posts?${params.toString()}`, {
+            headers,
             credentials: 'include',
           });
+          if (res.status === 401 || res.status === 403) throw new Error(`AUTH_${res.status}`);
           if (res.ok) {
             return res.json();
           }
@@ -476,8 +527,17 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
             props: p.props,
           }));
       }
-    } catch {
-      // Fallback
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('AUTH_401') || msg.includes('401')) {
+        throw new MattermostAuthenticationError(
+          'Mattermost authentication failed or session expired. Please log in using "npm run cli -- login".'
+        );
+      }
+      if (msg.includes('AUTH_403') || msg.includes('403')) {
+        throw new MattermostAuthorizationError('Mattermost authorization failed. Insufficient permissions.');
+      }
+      // Fallback to UI navigation
     }
 
     const channelPage = new MattermostChannelPage(page, this.baseUrl, this.logger);
@@ -492,6 +552,663 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
       channelId: input.channelId,
       message: p.message,
     }));
+  }
+
+  public async getPostThread(postId: string): Promise<{ order: string[]; posts: Record<string, Post> }> {
+    await this.ensureAuthenticated();
+    const page = await this.webClient.getPage();
+
+    try {
+      const rawThread = await page.evaluate(async (targetPostId) => {
+        const cookieMatch = document.cookie.match(/(?:^|;\s*)MMCSRF=([^;]*)/);
+        const csrfToken = cookieMatch ? decodeURIComponent(cookieMatch[1]) : '';
+        const headers: Record<string, string> = {
+          'X-Requested-With': 'XMLHttpRequest',
+        };
+        if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+
+        const res = await fetch(`/api/v4/posts/${encodeURIComponent(targetPostId)}/thread`, {
+          headers,
+          credentials: 'include',
+        });
+        if (res.status === 401 || res.status === 403) {
+          throw new Error(`AUTH_${res.status}: Session expired or unauthorized`);
+        }
+        if (res.status === 404) {
+          return null;
+        }
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+        }
+        return res.json();
+      }, postId);
+
+      const posts: Record<string, Post> = {};
+      if (rawThread && rawThread.posts) {
+        for (const [id, p] of Object.entries(rawThread.posts as Record<string, any>)) {
+          posts[id] = {
+            id: p.id,
+            createAt: p.create_at,
+            updateAt: p.update_at,
+            deleteAt: p.delete_at,
+            userId: p.user_id,
+            channelId: p.channel_id,
+            rootId: p.root_id,
+            message: p.message,
+            type: p.type,
+            hashtags: p.hashtags,
+            props: p.props,
+            fileIds: p.file_ids,
+            files: p.metadata?.files?.map((f: any) => ({
+              id: f.id,
+              name: f.name,
+              size: f.size,
+              mimeType: f.mime_type,
+              extension: f.extension,
+            })),
+            reactions: p.metadata?.reactions?.map((r: any) => ({
+              userId: r.user_id,
+              postId: r.post_id,
+              emojiName: r.emoji_name,
+              createAt: r.create_at,
+            })),
+          };
+        }
+      }
+
+      return {
+        order: rawThread?.order || [],
+        posts,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('AUTH_401') || msg.includes('401')) {
+        throw new MattermostAuthenticationError(
+          'Mattermost authentication failed or session expired. Please log in using "npm run cli -- login".'
+        );
+      }
+      if (msg.includes('AUTH_403') || msg.includes('403')) {
+        throw new MattermostAuthorizationError(
+          `Mattermost authorization failed for post '${postId}'. Insufficient permissions.`
+        );
+      }
+      throw new MattermostProviderError(
+        `Failed to retrieve thread for post '${postId}' via browser session: ${msg}`
+      );
+    }
+  }
+
+  public async searchPosts(terms: string, options?: { teamId?: string; isOrSearch?: boolean }): Promise<Post[]> {
+    await this.ensureAuthenticated();
+    const page = await this.webClient.getPage();
+
+    try {
+      const rawSearch = await page.evaluate(
+        async ({ terms, teamId, isOrSearch }) => {
+          const url = teamId
+            ? `/api/v4/teams/${encodeURIComponent(teamId)}/posts/search`
+            : '/api/v4/posts/search';
+          const cookieMatch = document.cookie.match(/(?:^|;\s*)MMCSRF=([^;]*)/);
+          const csrfToken = cookieMatch ? decodeURIComponent(cookieMatch[1]) : '';
+          const headers: Record<string, string> = {
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest',
+          };
+          if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+
+          const res = await fetch(url, {
+            method: 'POST',
+            credentials: 'include',
+            headers,
+            body: JSON.stringify({ terms, is_or_search: isOrSearch }),
+          });
+          if (res.status === 401 || res.status === 403) {
+            throw new Error(`AUTH_${res.status}: Session expired or unauthorized`);
+          }
+          if (!res.ok) {
+            throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+          }
+          return res.json();
+        },
+        { terms, teamId: options?.teamId, isOrSearch: options?.isOrSearch ?? false }
+      );
+
+      if (!rawSearch || !Array.isArray(rawSearch.order) || !rawSearch.posts) {
+        return [];
+      }
+
+      return rawSearch.order
+        .map((id: string) => rawSearch.posts[id])
+        .filter(Boolean)
+        .map((p: any) => ({
+          id: p.id,
+          createAt: p.create_at,
+          updateAt: p.update_at,
+          deleteAt: p.delete_at,
+          userId: p.user_id,
+          channelId: p.channel_id,
+          rootId: p.root_id,
+          message: p.message,
+          type: p.type,
+          hashtags: p.hashtags,
+          props: p.props,
+          fileIds: p.file_ids,
+          files: p.metadata?.files?.map((f: any) => ({
+            id: f.id,
+            name: f.name,
+            size: f.size,
+            mimeType: f.mime_type,
+            extension: f.extension,
+          })),
+          reactions: p.metadata?.reactions?.map((r: any) => ({
+            userId: r.user_id,
+            postId: r.post_id,
+            emojiName: r.emoji_name,
+            createAt: r.create_at,
+          })),
+        }));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('AUTH_401') || msg.includes('401')) {
+        throw new MattermostAuthenticationError(
+          'Mattermost authentication failed or session expired. Please log in using "npm run cli -- login".'
+        );
+      }
+      if (msg.includes('AUTH_403') || msg.includes('403')) {
+        throw new MattermostAuthorizationError('Mattermost authorization failed for search: Insufficient permissions.');
+      }
+      throw new MattermostProviderError(
+        `Failed to search posts for terms '${terms}' via browser session: ${msg}`
+      );
+    }
+  }
+
+  public async getUsersByIds(userIds: string[]): Promise<User[]> {
+    if (!userIds || userIds.length === 0) return [];
+    await this.ensureAuthenticated();
+    const page = await this.webClient.getPage();
+
+    try {
+      const rawUsers = await page.evaluate(async (ids) => {
+        const cookieMatch = document.cookie.match(/(?:^|;\s*)MMCSRF=([^;]*)/);
+        const csrfToken = cookieMatch ? decodeURIComponent(cookieMatch[1]) : '';
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest',
+        };
+        if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+
+        const res = await fetch('/api/v4/users/ids', {
+          method: 'POST',
+          credentials: 'include',
+          headers,
+          body: JSON.stringify(ids),
+        });
+        if (res.status === 401 || res.status === 403) {
+          throw new Error(`AUTH_${res.status}: Session expired or unauthorized`);
+        }
+        if (res.ok) {
+          return res.json();
+        }
+        return [];
+      }, userIds);
+
+      return (rawUsers || []).map((u: any) => ({
+        id: u.id,
+        username: u.username,
+        email: u.email,
+        firstName: u.first_name,
+        lastName: u.last_name,
+        nickname: u.nickname,
+        roles: u.roles,
+        createAt: u.create_at,
+      }));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('AUTH_401') || msg.includes('401')) {
+        throw new MattermostAuthenticationError(
+          'Mattermost authentication failed or session expired. Please log in using "npm run cli -- login".'
+        );
+      }
+      if (msg.includes('AUTH_403') || msg.includes('403')) {
+        throw new MattermostAuthorizationError('Mattermost authorization failed. Insufficient permissions.');
+      }
+      return [];
+    }
+  }
+
+  public async getUnreadSummary(): Promise<UnreadSummaryResult> {
+    await this.ensureAuthenticated();
+    const page = await this.webClient.getPage();
+
+    try {
+      const res = await page.evaluate(async () => {
+        const cookieMatch = document.cookie.match(/(?:^|;\s*)MMCSRF=([^;]*)/);
+        const csrfToken = cookieMatch ? decodeURIComponent(cookieMatch[1]) : '';
+        const headers: Record<string, string> = {
+          'X-Requested-With': 'XMLHttpRequest',
+        };
+        if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+
+        const teamsRes = await fetch('/api/v4/users/me/teams', { headers, credentials: 'include' });
+        if (teamsRes.status === 401 || teamsRes.status === 403) throw new Error(`AUTH_${teamsRes.status}`);
+        if (!teamsRes.ok) throw new Error(`HTTP ${teamsRes.status}: Failed to fetch teams`);
+        const teams = await teamsRes.json();
+
+        const channelsRes = await fetch('/api/v4/users/me/channels', { headers, credentials: 'include' });
+        if (channelsRes.status === 401 || channelsRes.status === 403) throw new Error(`AUTH_${channelsRes.status}`);
+        if (!channelsRes.ok) throw new Error(`HTTP ${channelsRes.status}: Failed to fetch channels`);
+        const channels = await channelsRes.json();
+
+        let allMembers: any[] = [];
+        const warnings: string[] = [];
+        let failedCount = 0;
+        for (const t of teams) {
+          const mRes = await fetch(`/api/v4/users/me/teams/${t.id}/channels/members`, { headers, credentials: 'include' });
+          if (mRes.status === 401 || mRes.status === 403) throw new Error(`AUTH_${mRes.status}`);
+          if (mRes.ok) {
+            const m = await mRes.json();
+            allMembers.push(...m);
+          } else {
+            failedCount++;
+            warnings.push(`Failed to fetch channel members for team '${t.display_name || t.name || t.id}' (HTTP ${mRes.status})`);
+          }
+        }
+
+        if (teams.length > 0 && failedCount === teams.length) {
+          throw new Error('All teams failed to fetch channel members');
+        }
+
+        const unreads: any[] = [];
+        for (const m of allMembers) {
+          const chan = channels.find((c: any) => c.id === m.channel_id);
+          if (chan) {
+            const unreadCount = Math.max(0, (chan.total_msg_count || 0) - (m.msg_count || 0));
+            const mentionCount = m.mention_count || 0;
+            if (unreadCount > 0 || mentionCount > 0) {
+              unreads.push({
+                channelId: chan.id,
+                channelName: chan.name,
+                displayName: chan.display_name || chan.name,
+                type: chan.type,
+                teamId: chan.team_id || undefined,
+                unreadCount,
+                mentionCount,
+                hasMention: mentionCount > 0,
+              });
+            }
+          }
+        }
+        return { unreads, warnings };
+      });
+
+      res.unreads.sort((a: any, b: any) => {
+        if (a.hasMention !== b.hasMention) return a.hasMention ? -1 : 1;
+        if (b.mentionCount !== a.mentionCount) return b.mentionCount - a.mentionCount;
+        return b.unreadCount - a.unreadCount;
+      });
+
+      return {
+        totalUnreadChannels: res.unreads.length,
+        channels: res.unreads,
+        warnings: res.warnings && res.warnings.length > 0 ? res.warnings : undefined,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('AUTH_401') || msg.includes('401')) {
+        throw new MattermostAuthenticationError(
+          'Mattermost authentication failed or session expired. Please log in using "npm run cli -- login".'
+        );
+      }
+      if (msg.includes('AUTH_403') || msg.includes('403')) {
+        throw new MattermostAuthorizationError('Mattermost authorization failed. Insufficient permissions.');
+      }
+      throw new MattermostProviderError(
+        `Failed to retrieve unread summary via browser session: ${msg}`
+      );
+    }
+  }
+
+  public async getPost(postId: string): Promise<Post> {
+    await this.ensureAuthenticated();
+    const page = await this.webClient.getPage();
+    let rawPost: any;
+    try {
+      rawPost = await page.evaluate(async (targetPostId) => {
+        const cookieMatch = document.cookie.match(/(?:^|;\s*)MMCSRF=([^;]*)/);
+        const csrfToken = cookieMatch ? decodeURIComponent(cookieMatch[1]) : '';
+        const headers: Record<string, string> = {
+          'X-Requested-With': 'XMLHttpRequest',
+        };
+        if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+
+        const res = await fetch(`/api/v4/posts/${encodeURIComponent(targetPostId)}`, {
+          headers,
+          credentials: 'include',
+        });
+        if (res.status === 401 || res.status === 403) {
+          throw new Error(`AUTH_${res.status}: Session expired or unauthorized`);
+        }
+        if (res.status === 404) return null;
+        if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+        return res.json();
+      }, postId);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('AUTH_401') || msg.includes('401')) {
+        throw new MattermostAuthenticationError(
+          'Mattermost authentication failed or session expired. Please log in using "npm run cli -- login".'
+        );
+      }
+      if (msg.includes('AUTH_403') || msg.includes('403')) {
+        throw new MattermostAuthorizationError(
+          `Mattermost authorization failed for post '${postId}'. Insufficient permissions.`
+        );
+      }
+      throw new MattermostProviderError(`Failed to retrieve post '${postId}': ${msg}`);
+    }
+
+    if (!rawPost) {
+      throw new MattermostValidationError(`Post not found with ID '${postId}'.`);
+    }
+
+    return {
+      id: rawPost.id,
+      createAt: rawPost.create_at,
+      updateAt: rawPost.update_at,
+      deleteAt: rawPost.delete_at,
+      userId: rawPost.user_id,
+      channelId: rawPost.channel_id,
+      rootId: rawPost.root_id,
+      message: rawPost.message,
+      type: rawPost.type,
+      hashtags: rawPost.hashtags,
+      props: rawPost.props,
+      fileIds: rawPost.file_ids,
+      files: rawPost.metadata?.files?.map((f: any) => ({
+        id: f.id,
+        name: f.name,
+        size: f.size,
+        mimeType: f.mime_type,
+        extension: f.extension,
+      })),
+      reactions: rawPost.metadata?.reactions?.map((r: any) => ({
+        userId: r.user_id,
+        postId: r.post_id,
+        emojiName: r.emoji_name,
+        createAt: r.create_at,
+      })),
+    };
+  }
+
+  public async getChannelPosts(
+    channelId: string,
+    options: { before?: string; after?: string; limit?: number }
+  ): Promise<Post[]> {
+    await this.ensureAuthenticated();
+    const page = await this.webClient.getPage();
+
+    let rawList: any;
+    try {
+      rawList = await page.evaluate(
+        async ({ chanId, before, after, limit }) => {
+          const cookieMatch = document.cookie.match(/(?:^|;\s*)MMCSRF=([^;]*)/);
+          const csrfToken = cookieMatch ? decodeURIComponent(cookieMatch[1]) : '';
+          const headers: Record<string, string> = {
+            'X-Requested-With': 'XMLHttpRequest',
+          };
+          if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+
+          const params = new URLSearchParams();
+          if (limit) params.set('per_page', limit.toString());
+          if (before) params.set('before', before);
+          if (after) params.set('after', after);
+          const res = await fetch(`/api/v4/channels/${encodeURIComponent(chanId)}/posts?${params.toString()}`, {
+            headers,
+            credentials: 'include',
+          });
+          if (res.status === 401 || res.status === 403) {
+            throw new Error(`AUTH_${res.status}: Session expired or unauthorized`);
+          }
+          if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+          return res.json();
+        },
+        { chanId: channelId, before: options.before, after: options.after, limit: options.limit || 30 }
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('AUTH_401') || msg.includes('401')) {
+        throw new MattermostAuthenticationError(
+          'Mattermost authentication failed or session expired. Please log in using "npm run cli -- login".'
+        );
+      }
+      if (msg.includes('AUTH_403') || msg.includes('403')) {
+        throw new MattermostAuthorizationError(
+          `Mattermost authorization failed for channel '${channelId}'. Insufficient permissions.`
+        );
+      }
+      throw new MattermostProviderError(`Failed to retrieve posts for channel '${channelId}': ${msg}`);
+    }
+
+    if (!rawList || !rawList.order || !rawList.posts) {
+      return [];
+    }
+
+    return rawList.order.map((id: string) => {
+      const p = rawList.posts[id];
+      return {
+        id: p.id,
+        createAt: p.create_at,
+        updateAt: p.update_at,
+        deleteAt: p.delete_at,
+        userId: p.user_id,
+        channelId: p.channel_id,
+        rootId: p.root_id,
+        message: p.message,
+        type: p.type,
+        hashtags: p.hashtags,
+        props: p.props,
+        fileIds: p.file_ids,
+        files: p.metadata?.files?.map((f: any) => ({
+          id: f.id,
+          name: f.name,
+          size: f.size,
+          mimeType: f.mime_type,
+          extension: f.extension,
+        })),
+        reactions: p.metadata?.reactions?.map((r: any) => ({
+          userId: r.user_id,
+          postId: r.post_id,
+          emojiName: r.emoji_name,
+          createAt: r.create_at,
+        })),
+      };
+    });
+  }
+
+  public async getUser(usernameOrId: string): Promise<UserProfileResult> {
+    await this.ensureAuthenticated();
+    const page = await this.webClient.getPage();
+    const clean = usernameOrId.trim().replace(/^@/, '');
+    const isId = /^[a-z0-9]{26}$/i.test(clean);
+
+    let rawUser: any;
+    try {
+      rawUser = await page.evaluate(
+        async ({ target, isUserId }) => {
+          const cookieMatch = document.cookie.match(/(?:^|;\s*)MMCSRF=([^;]*)/);
+          const csrfToken = cookieMatch ? decodeURIComponent(cookieMatch[1]) : '';
+          const headers: Record<string, string> = {
+            'X-Requested-With': 'XMLHttpRequest',
+          };
+          if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+
+          const path = isUserId
+            ? `/api/v4/users/${encodeURIComponent(target)}`
+            : `/api/v4/users/username/${encodeURIComponent(target)}`;
+          const res = await fetch(path, { headers, credentials: 'include' });
+          if (res.status === 401 || res.status === 403) {
+            throw new Error(`AUTH_${res.status}: Session expired or unauthorized`);
+          }
+          if (res.status === 404) return null;
+          if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+          return res.json();
+        },
+        { target: clean, isUserId: isId }
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('AUTH_401') || msg.includes('401')) {
+        throw new MattermostAuthenticationError(
+          'Mattermost authentication failed or session expired. Please log in using "npm run cli -- login".'
+        );
+      }
+      if (msg.includes('AUTH_403') || msg.includes('403')) {
+        throw new MattermostAuthorizationError(
+          `Mattermost authorization failed for user '${usernameOrId}'. Insufficient permissions.`
+        );
+      }
+      throw new MattermostProviderError(`Failed to fetch user profile '${usernameOrId}': ${msg}`);
+    }
+
+    if (!rawUser) {
+      throw new MattermostValidationError(`User '${usernameOrId}' not found.`);
+    }
+
+    return {
+      id: rawUser.id,
+      username: rawUser.username,
+      email: rawUser.email,
+      firstName: rawUser.first_name,
+      lastName: rawUser.last_name,
+      nickname: rawUser.nickname,
+      position: rawUser.position,
+      roles: rawUser.roles,
+      createAt: rawUser.create_at,
+    };
+  }
+
+  public async downloadFile(fileId: string, outputDir: string, maxSizeBytes?: number): Promise<FileDownloadResult> {
+    await this.ensureAuthenticated();
+    const cleanId = fileId.trim();
+    if (!/^[a-z0-9]{26}$/i.test(cleanId)) {
+      throw new MattermostValidationError(`Invalid file ID '${fileId}'. Expected 26-character alphanumeric string.`);
+    }
+
+    const context = await this.webClient.getContext();
+    const infoRes = await context.request.get(`${this.baseUrl}/api/v4/files/${encodeURIComponent(cleanId)}/info`);
+    if (infoRes.status() === 401) {
+      throw new MattermostAuthenticationError(
+        'Mattermost authentication failed or session expired. Please log in using "npm run cli -- login".'
+      );
+    }
+    if (infoRes.status() === 403) {
+      throw new MattermostAuthorizationError(
+        `Mattermost authorization failed for file '${cleanId}'. Insufficient permissions.`
+      );
+    }
+    if (infoRes.status() === 404) {
+      throw new MattermostValidationError(`File with ID '${cleanId}' not found.`);
+    }
+    if (!infoRes.ok()) {
+      throw new MattermostProviderError(`Failed to fetch file info: HTTP ${infoRes.status()}`);
+    }
+    const info = await infoRes.json();
+
+    const maxLimit = maxSizeBytes ?? 50 * 1024 * 1024;
+    if (info.size && info.size > maxLimit) {
+      throw new MattermostValidationError(
+        `File size (${info.size} bytes) exceeds maximum allowed limit of ${maxLimit} bytes.`
+      );
+    }
+
+    const rawName = info.name || `file_${cleanId}`;
+    const safeName = path.basename(rawName).replace(/[/\\?%*:|"<>]/g, '_');
+    const resolvedDir = path.resolve(outputDir);
+    if (!fs.existsSync(resolvedDir)) {
+      fs.mkdirSync(resolvedDir, { recursive: true });
+    }
+    const finalPath = path.resolve(resolvedDir, safeName);
+    if (!finalPath.startsWith(resolvedDir)) {
+      throw new MattermostValidationError('Path traversal attempt detected in filename.');
+    }
+
+    const dataRes = await context.request.get(`${this.baseUrl}/api/v4/files/${encodeURIComponent(cleanId)}`);
+    if (dataRes.status() === 401) {
+      throw new MattermostAuthenticationError(
+        'Mattermost authentication failed or session expired. Please log in using "npm run cli -- login".'
+      );
+    }
+    if (dataRes.status() === 403) {
+      throw new MattermostAuthorizationError(
+        `Mattermost authorization failed for file '${cleanId}'. Insufficient permissions.`
+      );
+    }
+    if (!dataRes.ok()) {
+      throw new MattermostProviderError(`Failed to download file data: HTTP ${dataRes.status()}`);
+    }
+    const buffer = await dataRes.body();
+    if (buffer.length > maxLimit) {
+      throw new MattermostValidationError(
+        `Downloaded file size (${buffer.length} bytes) exceeds maximum allowed limit of ${maxLimit} bytes.`
+      );
+    }
+
+    fs.writeFileSync(finalPath, buffer);
+    return {
+      fileId: cleanId,
+      filename: safeName,
+      mimeType: info.mime_type || 'application/octet-stream',
+      size: buffer.length,
+      savedPath: finalPath,
+    };
+  }
+
+  public async addReaction(postId: string, emojiName: string): Promise<ReactionResult> {
+    const user = await this.ensureAuthenticated();
+    const page = await this.webClient.getPage();
+    const cleanEmoji = emojiName.trim().replace(/^:|:$/g, '');
+
+    const raw = await page.evaluate(
+      async ({ userId, targetPostId, emoji }) => {
+        const cookieMatch = document.cookie.match(/(?:^|;\s*)MMCSRF=([^;]*)/);
+        const csrfToken = cookieMatch ? decodeURIComponent(cookieMatch[1]) : '';
+
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest',
+        };
+        if (csrfToken) {
+          headers['X-CSRF-Token'] = csrfToken;
+        }
+
+        const res = await fetch('/api/v4/reactions', {
+          method: 'POST',
+          credentials: 'include',
+          headers,
+          body: JSON.stringify({
+            user_id: userId,
+            post_id: targetPostId,
+            emoji_name: emoji,
+          }),
+        });
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.message || `HTTP ${res.status}: ${res.statusText}`);
+        }
+
+        return res.json();
+      },
+      { userId: user.id, targetPostId: postId, emoji: cleanEmoji }
+    );
+
+    return {
+      userId: raw.user_id,
+      postId: raw.post_id,
+      emojiName: raw.emoji_name,
+      createAt: raw.create_at || Date.now(),
+    };
   }
 
   public async close(): Promise<void> {

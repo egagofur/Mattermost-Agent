@@ -98,7 +98,7 @@ channels:
     expect(channel.name).toBe('dotify-backend');
   });
 
-  it('resolves to fallback_channel when target channel cannot be found', async () => {
+  it('throws MattermostChannelNotFoundError and fails hard when target channel cannot be found', async () => {
     const configLoader = new ChannelConfigLoader();
     configLoader.loadFromContent(`
 fallback_channel: town-square
@@ -107,12 +107,15 @@ channels:
 `);
 
     const resolver = new ChannelResolver(mockProvider, { configLoader });
-    const channel = await resolver.resolve('non-existent');
-
-    expect(channel.name).toBe('town-square');
+    await expect(resolver.resolve('non-existent')).rejects.toThrow(
+      MattermostChannelNotFoundError
+    );
+    await expect(resolver.resolve('non-existent')).rejects.toThrow(
+      "Mattermost channel 'non-existent' was not found"
+    );
   });
 
-  it('throws MattermostChannelNotFoundError when channel and fallback cannot be found', async () => {
+  it('throws MattermostChannelNotFoundError when channel cannot be found in empty config', async () => {
     const emptyLoader = new ChannelConfigLoader({ configPath: 'empty-test.yml' });
     const resolver = new ChannelResolver(mockProvider, { configLoader: emptyLoader });
     await expect(resolver.resolve('totally-unknown-channel')).rejects.toThrow(

@@ -164,20 +164,7 @@ export class ChannelResolver {
       });
     }
 
-    // 5. Fallback channel resolution
-    const fallback = this.configLoader.getFallbackChannel();
-    if (fallback && !isFallbackAttempt && fallback.toLowerCase() !== targetIdentifier.toLowerCase()) {
-      this.logger.warn(`Channel '${identifier}' was not found. Attempting fallback to configured channel '${fallback}'...`);
-      try {
-        const fallbackChannel = await this.resolve(fallback, effectiveTeamId, true);
-        if (fallbackChannel) {
-          return fallbackChannel;
-        }
-      } catch {
-        // Continue to throw primary not found error
-      }
-    }
-
+    // Fail-hard: never fallback silently to another channel (e.g. town-square)
     throw new MattermostChannelNotFoundError(identifier, {
       teamId: effectiveTeamId,
       resolvedIdentifier: targetIdentifier,

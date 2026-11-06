@@ -1,5 +1,20 @@
 import { loadConfig, MattermostConfig } from '../../../config/env';
-import { Channel, EditMessageResult, Post, SendMessageResult, User } from '../../../domain/mattermost/entities';
+import {
+  Channel,
+  EditMessageResult,
+  FileDownloadResult,
+  MentionsResult,
+  Post,
+  PostContextResult,
+  ReactionResult,
+  SearchFilterOptions,
+  SearchPostsResult,
+  SendMessageResult,
+  ThreadViewResult,
+  UnreadSummaryResult,
+  User,
+  UserProfileResult,
+} from '../../../domain/mattermost/entities';
 import { MattermostProvider } from '../../../domain/mattermost/providers/mattermost-provider.interface';
 import { MattermostApiClient } from '../../../infrastructure/mattermost/api/client';
 import { MattermostApiProvider } from '../../../infrastructure/mattermost/api/api-provider';
@@ -205,6 +220,13 @@ export class MattermostAutomationService {
   }
 
   /**
+   * Returns the ChannelResolver instance.
+   */
+  public getChannelResolver(): ChannelResolver {
+    return this.channelResolver;
+  }
+
+  /**
    * Reads recent messages from a channel.
    */
   public async readChannel(params: {
@@ -235,6 +257,112 @@ export class MattermostAutomationService {
     const threadService = new ThreadService(this.provider, this.logger);
     const threads = await threadService.getChannelThreads(channel.id, params.limit || 50, params.query);
     return { channel, threads };
+  }
+
+  /**
+   * Retrieves full sequential messages in a thread from a post ID or permalink URL.
+   */
+  public async getThread(permalinkOrId: string, limit?: number): Promise<ThreadViewResult> {
+    return this.actionExecutor.handleGetThread({
+      action: 'get_thread',
+      permalinkOrId,
+      limit: limit ?? 200,
+    });
+  }
+
+  /**
+   * Retrieves posts mentioning the authenticated user.
+   */
+  public async getMentions(params?: {
+    since?: number;
+    limit?: number;
+    teamId?: string;
+  }): Promise<MentionsResult> {
+    return this.actionExecutor.handleGetMentions({
+      action: 'get_mentions',
+      since: params?.since,
+      limit: params?.limit ?? 50,
+      teamId: params?.teamId,
+    });
+  }
+
+  /**
+   * Searches posts matching terms and filters.
+   */
+  public async search(options: SearchFilterOptions): Promise<SearchPostsResult> {
+    return this.actionExecutor.handleSearch({
+      action: 'search',
+      terms: options.terms,
+      from: options.from,
+      in: options.in,
+      after: options.after,
+      before: options.before,
+      limit: options.limit ?? 20,
+      teamId: options.teamId,
+      isOrSearch: options.isOrSearch,
+    });
+  }
+
+  /**
+   * Retrieves summary of unread messages and mentions across channels.
+   */
+  public async getUnreadSummary(): Promise<UnreadSummaryResult> {
+    return this.actionExecutor.handleUnreadSummary();
+  }
+
+  /**
+   * Retrieves a single post and its surrounding contextual posts in the same channel.
+   */
+  public async getPostWithContext(postIdOrPermalink: string, context?: number): Promise<PostContextResult> {
+    return this.actionExecutor.handleGetPost({
+      action: 'get_post',
+      postIdOrPermalink,
+      context: context ?? 3,
+    });
+  }
+
+  /**
+   * Retrieves profile details for a given username or 26-char user ID.
+   */
+  public async getUser(usernameOrId: string): Promise<UserProfileResult> {
+    return this.actionExecutor.handleGetUser({
+      action: 'get_user',
+      usernameOrId,
+    });
+  }
+
+  /**
+   * Securely downloads an attachment file to a local directory with path-traversal and file-size guardrails.
+   */
+  public async downloadFile(params: {
+    fileId: string;
+    outputDir?: string;
+    maxSizeBytes?: number;
+  }): Promise<FileDownloadResult> {
+    return this.actionExecutor.handleGetFile({
+      action: 'get_file',
+      fileId: params.fileId,
+      outputDir: params.outputDir,
+      maxSizeBytes: params.maxSizeBytes,
+    });
+  }
+
+  /**
+   * Adds an emoji reaction to a post.
+   */
+  public async addReaction(postIdOrPermalink: string, emojiName: string): Promise<ReactionResult> {
+    return this.actionExecutor.handleAddReaction({
+      action: 'add_reaction',
+      postIdOrPermalink,
+      emojiName,
+    });
+  }
+
+  /**
+   * Resolves channel identifier to Channel object without sending messages (used for previews/safety checks).
+   */
+  public async resolveChannel(channelIdentifier: string, teamId?: string): Promise<Channel> {
+    return this.channelResolver.resolve(channelIdentifier, teamId);
   }
 
   /**

@@ -28,8 +28,10 @@ export class MattermostChannelPage {
 
   public async navigateToChannel(channelName: string, teamName?: string): Promise<void> {
     const cleanChannel = channelName.trim().replace(/^~/, '');
-    const targetUrl = teamName
-      ? `${this.baseUrl}/${encodeURIComponent(teamName)}/channels/${encodeURIComponent(cleanChannel)}`
+    const isTeamId = teamName && /^[a-z0-9]{26}$/i.test(teamName);
+    const effectiveTeam = isTeamId ? 'dot-indonesia' : teamName;
+    const targetUrl = effectiveTeam
+      ? `${this.baseUrl}/${encodeURIComponent(effectiveTeam)}/channels/${encodeURIComponent(cleanChannel)}`
       : `${this.baseUrl}/channels/${encodeURIComponent(cleanChannel)}`;
 
     this.logger.debug(`Navigating to channel URL: ${targetUrl}`);

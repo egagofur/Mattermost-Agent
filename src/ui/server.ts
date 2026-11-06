@@ -268,7 +268,7 @@ export class MattermostHttpServer {
 
     // 4. Channels API
     if (pathname === '/api/channels' && method === 'GET') {
-      const configLoader = new ChannelConfigLoader();
+      const configLoader = this.automationService.getChannelResolver().getConfigLoader();
       const mappings = configLoader.getAllMappings();
       this.sendJson(res, 200, {
         success: true,
@@ -289,7 +289,7 @@ export class MattermostHttpServer {
 
     if (pathname === '/api/channels/toggle' && method === 'POST') {
       const body = await this.parseBody<{ channel: string; enabled: boolean }>(req);
-      const configLoader = new ChannelConfigLoader();
+      const configLoader = this.automationService.getChannelResolver().getConfigLoader();
       const success = configLoader.toggleChannel(body.channel, body.enabled);
       this.broadcast('channels:toggled', { channel: body.channel, enabled: body.enabled });
       this.sendJson(res, success ? 200 : 404, { success, channel: body.channel, enabled: body.enabled });

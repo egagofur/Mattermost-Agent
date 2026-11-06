@@ -23,6 +23,7 @@ export interface MattermostRawUser {
   first_name?: string;
   last_name?: string;
   nickname?: string;
+  position?: string;
   roles?: string;
   create_at?: number;
 }
@@ -56,6 +57,22 @@ export interface MattermostRawPost {
   type?: string;
   hashtags?: string;
   props?: Record<string, unknown>;
+  file_ids?: string[];
+  metadata?: {
+    files?: Array<{
+      id: string;
+      name: string;
+      size?: number;
+      mime_type?: string;
+      extension?: string;
+    }>;
+    reactions?: Array<{
+      user_id: string;
+      post_id: string;
+      emoji_name: string;
+      create_at?: number;
+    }>;
+  };
 }
 
 export interface MattermostRawPostList {
@@ -289,5 +306,97 @@ export class MattermostApiClient {
       params.set('since', since.toString());
     }
     return this.request<MattermostRawPostList>(`/api/v4/channels/${encodeURIComponent(channelId)}/posts?${params.toString()}`);
+  }
+
+  public async getPostThread(postId: string): Promise<MattermostRawPostList> {
+    return this.request<MattermostRawPostList>(`/api/v4/posts/${encodeURIComponent(postId)}/thread`);
+  }
+
+  public async searchPosts(terms: string, teamId?: string, isOrSearch = false): Promise<MattermostRawPostList> {
+    const path = teamId
+      ? `/api/v4/teams/${encodeURIComponent(teamId)}/posts/search`
+      : '/api/v4/posts/search';
+    return this.request<MattermostRawPostList>(path, {
+      method: 'POST',
+      body: {
+        terms,
+        is_or_search: isOrSearch,
+      },
+    });
+  }
+
+  public async getUsersByIds(userIds: string[]): Promise<MattermostRawUser[]> {
+    if (!userIds || userIds.length === 0) return [];
+    return this.request<MattermostRawUser[]>('/api/v4/users/ids', {
+      method: 'POST',
+      body: userIds,
+    });
+  }
+
+  public async getMyChannels(): Promise<MattermostRawChannel[]> {
+    return this.request<MattermostRawChannel[]>('/api/v4/users/me/channels');
+  }
+
+  public async getChannelMembersForTeam(teamId: string): Promise<any[]> {
+    return this.request<any[]>(`/api/v4/users/me/teams/${encodeURIComponent(teamId)}/channels/members`);
+  }
+
+  public async getPost(postId: string): Promise<MattermostRawPost> {
+    return this.request<MattermostRawPost>(`/api/v4/posts/${encodeURIComponent(postId)}`);
+  }
+
+  public async getChannelPostsContext(
+    channelId: string,
+    options: { before?: string; after?: string; perPage?: number }
+  ): Promise<MattermostRawPostList> {
+    const params = new URLSearchParams();
+    if (options.perPage) {
+      params.set('per_page', options.perPage.toString());
+    }
+    if (options.before) {
+      params.set('before', options.before);
+    }
+    if (options.after) {
+      params.set('after', options.after);
+    }
+    return this.request<MattermostRawPostList>(
+      `/api/v4/channels/${encodeURIComponent(channelId)}/posts?${params.toString()}`
+    );
+  }
+
+  public async getUser(usernameOrId: string): Promise<MattermostRawUser> {
+    const clean = usernameOrId.trim().replace(/^@/, '');
+    const isId = /^[a-z0-9]{26}$/i.test(clean);
+    const path = isId ? `/api/v4/users/${encodeURIComponent(clean)}` : `/api/v4/users/username/${encodeURIComponent(clean)}`;
+    return this.request<MattermostRawUser>(path);
+  }
+
+  public async getFileInfo(fileId: string): Promise<any> {
+    return this.request<any>(`/api/v4/files/${encodeURIComponent(fileId)}/info`);
+  }
+
+  public async downloadFileData(fileId: string): Promise<Buffer> {
+    const url = `${this.baseUrl}/api/v4/files/${encodeURIComponent(fileId)}`;
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${this.token}`,
+      },
+    });
+    if (!res.ok) {
+      throw new MattermostNetworkError(`Failed to download file data: HTTP ${res.status}`);
+    }
+    const arrayBuffer = await res.arrayBuffer();
+    return Buffer.from(arrayBuffer);
+  }
+
+  public async addReaction(userId: string, postId: string, emojiName: string): Promise<any> {
+    return this.request<any>('/api/v4/reactions', {
+      method: 'POST',
+      body: {
+        user_id: userId,
+        post_id: postId,
+        emoji_name: emojiName.replace(/^:|:$/g, ''),
+      },
+    });
   }
 }

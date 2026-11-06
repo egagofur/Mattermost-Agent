@@ -61,33 +61,61 @@ export class MattermostWebClient {
     this.logger.debug(`Navigating to ${this.baseUrl} to verify session...`);
 
     try {
-      await page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      try {
+        await page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      } catch (gotoErr) {
+        if (!String(gotoErr).includes('ERR_ABORTED')) {
+          throw gotoErr;
+        }
+      }
       await page.waitForTimeout(1500);
 
       const currentUrl = page.url();
-      if (currentUrl.includes('/login') || currentUrl.includes('/landing')) {
+      if (currentUrl.includes('/landing')) {
+        const viewInBrowser = page.locator('a:has-text("View in Browser"), button:has-text("View in Browser")');
+        if (await viewInBrowser.isVisible({ timeout: 2000 }).catch(() => false)) {
+          await viewInBrowser.click();
+          await page.waitForTimeout(1500);
+        }
+      }
+
+      const updatedUrl = page.url();
+      if (updatedUrl.includes('/login')) {
         return { authenticated: false };
       }
 
-      // Check for presence of sidebar / user status
-      const userStatusEl = page.locator('#statusDropdown, .status-wrapper, [data-testid="user-avatar"]').first();
-      const isVisible = await userStatusEl.isVisible({ timeout: 5000 }).catch(() => false);
+      // Check genuine authentication via /api/v4/users/me
+      const authResult = await page.evaluate(async () => {
+        try {
+          const cookieMatch = document.cookie.match(/(?:^|;\s*)MMCSRF=([^;]*)/);
+          const csrfToken = cookieMatch ? decodeURIComponent(cookieMatch[1]) : '';
+          const headers: Record<string, string> = {
+            'X-Requested-With': 'XMLHttpRequest',
+          };
+          if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
 
-      let username = 'browser-user';
-      try {
-        const nameEl = page.locator('.sidebar-header__username, .user__name, #statusDropdown').first();
-        if (await nameEl.isVisible({ timeout: 1000 })) {
-          const text = await nameEl.innerText();
-          if (text) username = text.replace(/^@/, '').trim();
+          const res = await fetch('/api/v4/users/me', {
+            headers,
+            credentials: 'include',
+          });
+          if (res.ok) {
+            const user = await res.json();
+            return { authenticated: true, user };
+          }
+          return { authenticated: false, status: res.status };
+        } catch {
+          return { authenticated: false };
         }
-      } catch {
-        // fallback
+      });
+
+      if (!authResult.authenticated || !authResult.user) {
+        return { authenticated: false };
       }
 
       return {
-        authenticated: isVisible || !currentUrl.includes('/login'),
-        username,
-        userId: 'browser-authenticated-user',
+        authenticated: true,
+        username: authResult.user.username || 'personal-account',
+        userId: authResult.user.id || 'browser-authenticated-user',
       };
     } catch (err) {
       this.logger.error('Failed while verifying browser session', { error: String(err) });
@@ -119,16 +147,37 @@ export class MattermostWebClient {
 
     console.log('Waiting for login to complete... (Will close once channels view is detected)');
 
-    // Wait until URL moves away from /login and sidebar/post composer is present
-    try {
-      await page.waitForURL((url) => !url.toString().includes('/login') && !url.toString().includes('/landing'), {
-        timeout: 180000, // 3 minutes timeout for manual login
-      });
+    // Wait until user is genuinely authenticated via API check
+    const startTime = Date.now();
+    const timeoutMs = 180000; // 3 minutes
+    let loggedIn = false;
 
-      await page.waitForSelector('#post_textbox, #statusDropdown, .sidebar--left', { timeout: 30000 });
+    try {
+      while (Date.now() - startTime < timeoutMs) {
+        await page.waitForTimeout(1500);
+        const isAuth = await page.evaluate(async () => {
+          try {
+            const res = await fetch('/api/v4/users/me', { credentials: 'include' });
+            if (res.ok) {
+              const user = await res.json();
+              return !!(user && user.id);
+            }
+          } catch {}
+          return false;
+        });
+
+        if (isAuth) {
+          loggedIn = true;
+          break;
+        }
+      }
+
+      if (!loggedIn) {
+        throw new MattermostProviderError('Timed out waiting for manual login to complete in browser.', 'LOGIN_TIMEOUT');
+      }
+
       console.log('\n✅ Login successfully detected! Browser session profile has been saved.');
-    } catch (err) {
-      throw new MattermostProviderError('Timed out waiting for manual login to complete in browser.', 'LOGIN_TIMEOUT');
+      await page.waitForTimeout(2000);
     } finally {
       await context.close();
     }
