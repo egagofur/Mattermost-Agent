@@ -6,6 +6,7 @@ import {
   MentionsResult,
   Post,
   PostContextResult,
+  ReactionResult,
   SearchPostsResult,
   SendMessageResult,
   ThreadViewResult,
@@ -28,6 +29,7 @@ import { formatMessageWithAttribution } from '../../../infrastructure/mattermost
 import { ThreadService } from '../../../infrastructure/mattermost/services/thread-service';
 import {
   ActionResult,
+  AddReactionAction,
   EditMessageAction,
   GetChannelAction,
   GetFileAction,
@@ -146,6 +148,9 @@ export class ActionExecutor {
           break;
         case 'get_file':
           resultData = await this.handleGetFile(action);
+          break;
+        case 'add_reaction':
+          resultData = await this.handleAddReaction(action);
           break;
       }
 
@@ -390,6 +395,17 @@ export class ActionExecutor {
       return this.provider.downloadFile(action.fileId, outputDir, action.maxSizeBytes);
     }
     throw new MattermostProviderError('The configured provider does not support downloading attachment files.');
+  }
+
+  public async handleAddReaction(action: AddReactionAction): Promise<ReactionResult> {
+    const postId = ThreadService.extractPostIdFromPermalink(action.postIdOrPermalink);
+    if (!postId) {
+      throw new MattermostValidationError(`Invalid post identifier or permalink: '${action.postIdOrPermalink}'`);
+    }
+    if (this.provider.addReaction) {
+      return this.provider.addReaction(postId, action.emojiName);
+    }
+    throw new MattermostProviderError('The configured provider does not support adding reactions.');
   }
 }
 

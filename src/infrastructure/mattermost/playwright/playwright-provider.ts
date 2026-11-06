@@ -8,6 +8,7 @@ import {
   GetChannelInput,
   GetMessagesInput,
   Post,
+  ReactionResult,
   ReplyToMessageInput,
   SendMessageInput,
   SendMessageResult,
@@ -929,6 +930,53 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
       mimeType: info.mime_type || 'application/octet-stream',
       size: buffer.length,
       savedPath: finalPath,
+    };
+  }
+
+  public async addReaction(postId: string, emojiName: string): Promise<ReactionResult> {
+    const user = await this.ensureAuthenticated();
+    const page = await this.webClient.getPage();
+    const cleanEmoji = emojiName.trim().replace(/^:|:$/g, '');
+
+    const raw = await page.evaluate(
+      async ({ userId, targetPostId, emoji }) => {
+        const cookieMatch = document.cookie.match(/(?:^|;\s*)MMCSRF=([^;]*)/);
+        const csrfToken = cookieMatch ? decodeURIComponent(cookieMatch[1]) : '';
+
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest',
+        };
+        if (csrfToken) {
+          headers['X-CSRF-Token'] = csrfToken;
+        }
+
+        const res = await fetch('/api/v4/reactions', {
+          method: 'POST',
+          credentials: 'include',
+          headers,
+          body: JSON.stringify({
+            user_id: userId,
+            post_id: targetPostId,
+            emoji_name: emoji,
+          }),
+        });
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.message || `HTTP ${res.status}: ${res.statusText}`);
+        }
+
+        return res.json();
+      },
+      { userId: user.id, targetPostId: postId, emoji: cleanEmoji }
+    );
+
+    return {
+      userId: raw.user_id,
+      postId: raw.post_id,
+      emojiName: raw.emoji_name,
+      createAt: raw.create_at || Date.now(),
     };
   }
 

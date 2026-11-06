@@ -92,6 +92,12 @@ export const GetFileActionSchema = z.object({
   maxSizeBytes: z.number().int().positive().optional(),
 });
 
+export const AddReactionActionSchema = z.object({
+  action: z.literal('add_reaction'),
+  postIdOrPermalink: z.string().min(1, 'Post ID or permalink is required.'),
+  emojiName: z.string().min(1, 'Emoji name is required.'),
+});
+
 export const MattermostActionSchema = z.discriminatedUnion('action', [
   SendMessageActionSchema,
   ReplyToMessageActionSchema,
@@ -106,6 +112,7 @@ export const MattermostActionSchema = z.discriminatedUnion('action', [
   GetPostActionSchema,
   GetUserActionSchema,
   GetFileActionSchema,
+  AddReactionActionSchema,
 ]);
 
 export type SendMessageAction = z.infer<typeof SendMessageActionSchema>;
@@ -121,6 +128,7 @@ export type UnreadSummaryAction = z.infer<typeof UnreadSummaryActionSchema>;
 export type GetPostAction = z.infer<typeof GetPostActionSchema>;
 export type GetUserAction = z.infer<typeof GetUserActionSchema>;
 export type GetFileAction = z.infer<typeof GetFileActionSchema>;
+export type AddReactionAction = z.infer<typeof AddReactionActionSchema>;
 export type MattermostAction = z.infer<typeof MattermostActionSchema>;
 
 export interface ActionResult<T = unknown> {

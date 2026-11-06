@@ -309,6 +309,36 @@ program
     }
   });
 
+// react
+program
+  .command('react <postIdOrPermalink> <emojiName>')
+  .description('Add an emoji reaction to a post by post ID or permalink URL')
+  .action(async (postIdOrPermalink, emojiName) => {
+    if (!postIdOrPermalink || !emojiName) {
+      console.error('\n❌ Error: Post ID/Permalink and Emoji Name are required.');
+      console.error('   Usage: mattermost react <postIdOrPermalink> <emojiName>\n');
+      process.exit(1);
+    }
+
+    const service = getService();
+    try {
+      const result = await service.addReaction(postIdOrPermalink, emojiName);
+      if (program.opts().json) {
+        handleOutput(result, true);
+      } else {
+        console.log('\n✨ Reaction added successfully');
+        console.log(`   Post ID:     ${result.postId}`);
+        console.log(`   User ID:     ${result.userId}`);
+        console.log(`   Emoji:       :${result.emojiName}:`);
+        console.log('');
+      }
+    } catch (err) {
+      handleError(err);
+    } finally {
+      await service.close();
+    }
+  });
+
 // threads (Thread Inspector)
 program
   .command('threads [channel] [query]')

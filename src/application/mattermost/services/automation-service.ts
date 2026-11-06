@@ -6,6 +6,7 @@ import {
   MentionsResult,
   Post,
   PostContextResult,
+  ReactionResult,
   SearchFilterOptions,
   SearchPostsResult,
   SendMessageResult,
@@ -336,6 +337,17 @@ export class MattermostAutomationService {
       fileId: params.fileId,
       outputDir: params.outputDir,
       maxSizeBytes: params.maxSizeBytes,
+    });
+  }
+
+  /**
+   * Adds an emoji reaction to a post.
+   */
+  public async addReaction(postIdOrPermalink: string, emojiName: string): Promise<ReactionResult> {
+    return this.actionExecutor.handleAddReaction({
+      action: 'add_reaction',
+      postIdOrPermalink,
+      emojiName,
     });
   }
 

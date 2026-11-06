@@ -8,6 +8,7 @@ import {
   GetChannelInput,
   GetMessagesInput,
   Post,
+  ReactionResult,
   ReplyToMessageInput,
   SendMessageInput,
   SendMessageResult,
@@ -345,6 +346,18 @@ export class MattermostApiProvider implements MattermostProvider {
       mimeType: info.mime_type || 'application/octet-stream',
       size: buffer.length,
       savedPath: finalPath,
+    };
+  }
+
+  public async addReaction(postId: string, emojiName: string): Promise<ReactionResult> {
+    const me = await this.getMe();
+    const cleanEmoji = emojiName.trim().replace(/^:|:$/g, '');
+    const raw = await this.client.addReaction(me.id, postId, cleanEmoji);
+    return {
+      userId: raw.user_id,
+      postId: raw.post_id,
+      emojiName: raw.emoji_name,
+      createAt: raw.create_at || Date.now(),
     };
   }
 }

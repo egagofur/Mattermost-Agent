@@ -388,4 +388,15 @@ export class MattermostApiClient {
     const arrayBuffer = await res.arrayBuffer();
     return Buffer.from(arrayBuffer);
   }
+
+  public async addReaction(userId: string, postId: string, emojiName: string): Promise<any> {
+    return this.request<any>('/api/v4/reactions', {
+      method: 'POST',
+      body: {
+        user_id: userId,
+        post_id: postId,
+        emoji_name: emojiName.replace(/^:|:$/g, ''),
+      },
+    });
+  }
 }

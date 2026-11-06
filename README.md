@@ -250,6 +250,15 @@ Commands:
   whoami                             Verify personal identity and display current account
   send [channel] [message]           Send a message (e.g. `send per-fe-an "Hello"`)
   reply [channel] [rootId] [message] Reply to a thread (supports :1, :latest, --find, permalink)
+  edit <postIdOrPermalink> <msg>     Edit an existing message
+  react <postIdOrPermalink> <emoji>  Add an emoji reaction to a post
+  thread <permalinkOrId>             View complete sequential messages in a thread
+  post <postIdOrPermalink>           View a post with surrounding context in the channel
+  mentions                           List recent posts mentioning your account
+  search [terms]                     Search messages across channels with filters
+  unread                             Summarize unread channels and mentions
+  user <usernameOrId>                Look up user profile, roles, and position
+  file <fileId>                      Download an attachment file safely
   threads [channel] [query]          List & search active threads in a channel
   channels [query]                   List & search configured channels in channels.yml
   enable <channel>                   Enable a channel in channels.yml
@@ -547,18 +556,40 @@ Add to your extension settings (`cline_mcp_settings.json`):
 
 ### 🛠️ Exposed MCP Tools
 
-| Tool Name | Description |
-| :--- | :--- |
-| `mattermost_whoami` | Verify authenticated identity (username, user ID, email, roles). |
-| `mattermost_list_channels` | List all discovered & configured channels with enabled status and aliases. |
-| `mattermost_get_threads` | List active threads in a channel with preview, reply counts, and `:1` shortcuts. |
-| `mattermost_send_message` | Send a new message to a channel with optional sender attribution (`from`). |
-| `mattermost_reply_thread` | Reply to a thread via shortcut (`:1`, `:latest`), keyword (`find`), permalink, or ID. |
-| `mattermost_read_channel` | Read recent channel posts and thread replies. |
-| `mattermost_sync_channels` | Auto-discover all channels across teams and sync to `channels.yml`. |
-| `mattermost_list_cron_jobs` | List configured cron jobs, schedules, and next run calculations. |
-| `mattermost_run_cron_job` | Trigger an immediate test execution of a specific cron job. |
-| `mattermost_toggle_cron_job` | Enable or disable a cron job dynamically in `cron.yml`. |
+| Tool Name | Type | Description |
+| :--- | :--- | :--- |
+| `mattermost_whoami` | Read | Verify authenticated identity (username, user ID, email, roles). |
+| `mattermost_list_channels` | Read | List all discovered & configured channels with enabled status and aliases. |
+| `mattermost_get_threads` | Read | List active threads in a channel with preview, reply counts, and `:1` shortcuts. |
+| `mattermost_get_thread` | Read | View full sequential messages in a thread from post ID or permalink URL. |
+| `mattermost_get_mentions` | Read | List posts mentioning your account with reply statuses. |
+| `mattermost_search` | Read | Search messages across channels with keywords, user, channel, and date filters. |
+| `mattermost_unread_summary` | Read | Retrieve summary of all unread channels and mentions prioritized by mentions. |
+| `mattermost_get_post` | Read | Retrieve a post along with surrounding contextual messages before and after. |
+| `mattermost_get_user` | Read | Retrieve user profile details, roles, and position by username or ID. |
+| `mattermost_get_file` | Read | Securely download an attachment file by file ID into local directory. |
+| `mattermost_send_message` | **Write** | Send a message to a channel. **Requires `approved: true`**. |
+| `mattermost_reply_thread` | **Write** | Reply to a thread via shortcut, keyword, or permalink. **Requires `approved: true`**. |
+| `mattermost_edit_message` | **Write** | Edit an existing post/message. **Requires `approved: true`**. |
+| `mattermost_add_reaction` | **Write** | Add an emoji reaction to a post. **Requires `approved: true`**. |
+| `mattermost_read_channel` | Read | Read recent channel posts and thread replies. |
+| `mattermost_sync_channels` | Read | Auto-discover all channels across teams and sync to `channels.yml`. |
+| `mattermost_list_cron_jobs` | Read | List configured cron jobs, schedules, and next run calculations. |
+| `mattermost_run_cron_job` | Action | Trigger an immediate test execution of a specific cron job. |
+| `mattermost_toggle_cron_job` | Action | Enable or disable a cron job dynamically in `cron.yml`. |
+
+### 🛡️ Write Approval Safety Guard (AI Agent Protection)
+
+To prevent AI coding assistants from unintentionally sending, editing, or reacting to messages without human review, all **write operations** at the MCP layer (`mattermost_send_message`, `mattermost_reply_thread`, `mattermost_edit_message`, and `mattermost_add_reaction`) enforce an explicit approval guard:
+
+* **When `approved: true` is omitted or `false`**:
+  * The tool **does NOT call the server** or send any message.
+  * Instead, it returns a safe `draft_preview` JSON containing the payload details for the agent/user to review.
+* **When `approved: true` is explicitly provided**:
+  * The action is confirmed and dispatched to Mattermost.
+
+> [!NOTE]
+> This safety guard applies strictly to the MCP Server layer for AI agents. CLI commands (`mattermost send`, `reply`, `react`) and automated cron jobs operate directly without requiring the `approved` flag.
 
 ---
 

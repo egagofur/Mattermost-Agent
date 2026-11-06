@@ -71,7 +71,7 @@ export function createMattermostMcpServer(service?: MattermostAutomationService)
     },
     {
       name: 'mattermost_send_message',
-      description: 'Send a message to a Mattermost channel under your personal account.',
+      description: 'Send a message to a Mattermost channel under your personal account. Requires approved: true to actually send.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -91,13 +91,17 @@ export function createMattermostMcpServer(service?: MattermostAutomationService)
             type: 'string',
             description: 'Optional Root Post ID if replying to a thread.',
           },
+          approved: {
+            type: 'boolean',
+            description: 'Must be set to true to actually execute this write action. If false or omitted, the server returns a safety draft preview without sending.',
+          },
         },
         required: ['channel', 'message'],
       },
     },
     {
       name: 'mattermost_reply_thread',
-      description: 'Reply to an existing thread in a Mattermost channel. Supports shortcut numbers (:1, :latest), keyword search, permalinks, or post ID.',
+      description: 'Reply to an existing thread in a Mattermost channel. Supports shortcut numbers (:1, :latest), keyword search, permalinks, or post ID. Requires approved: true to actually send.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -121,13 +125,17 @@ export function createMattermostMcpServer(service?: MattermostAutomationService)
             type: 'string',
             description: 'Optional sender attribution label (e.g. "AI", "Agent").',
           },
+          approved: {
+            type: 'boolean',
+            description: 'Must be set to true to actually execute this write action. If false or omitted, the server returns a safety draft preview without sending.',
+          },
         },
         required: ['channel', 'message'],
       },
     },
     {
       name: 'mattermost_edit_message',
-      description: 'Edit an existing post/message in Mattermost by post ID or permalink URL.',
+      description: 'Edit an existing post/message in Mattermost by post ID or permalink URL. Requires approved: true to actually edit.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -142,6 +150,10 @@ export function createMattermostMcpServer(service?: MattermostAutomationService)
           from: {
             type: 'string',
             description: 'Optional sender attribution label (e.g. "AI", "AI Agent").',
+          },
+          approved: {
+            type: 'boolean',
+            description: 'Must be set to true to actually execute this write action. If false or omitted, the server returns a safety draft preview without modifying.',
           },
         },
         required: ['postId', 'message'],
@@ -356,6 +368,28 @@ export function createMattermostMcpServer(service?: MattermostAutomationService)
         required: ['fileId'],
       },
     },
+    {
+      name: 'mattermost_add_reaction',
+      description: 'Add an emoji reaction to a post by post ID or permalink URL. Requires approved: true to actually react.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          postIdOrPermalink: {
+            type: 'string',
+            description: 'Post 26-character ID or permalink URL to react to.',
+          },
+          emojiName: {
+            type: 'string',
+            description: 'Emoji name to react with (e.g. "thumbsup", "eyes", "white_check_mark", without colons).',
+          },
+          approved: {
+            type: 'boolean',
+            description: 'Must be set to true to actually execute this write action. If false or omitted, the server returns a safety draft preview without reacting.',
+          },
+        },
+        required: ['postIdOrPermalink', 'emojiName'],
+      },
+    },
   ];
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -480,6 +514,33 @@ export function createMattermostMcpServer(service?: MattermostAutomationService)
           const from = typeof args.from === 'string' ? args.from : undefined;
           const rootId = typeof args.rootId === 'string' ? args.rootId : undefined;
 
+          if (args.approved !== true) {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify(
+                    {
+                      status: 'draft_preview',
+                      requiresApproval: true,
+                      action: 'send_message',
+                      preview: {
+                        channel,
+                        message,
+                        from,
+                        rootId,
+                      },
+                      warning:
+                        "Action was NOT executed because 'approved: true' was not provided. Review this preview and call again with 'approved: true' to confirm execution.",
+                    },
+                    null,
+                    2
+                  ),
+                },
+              ],
+            };
+          }
+
           const result = await automationService.sendMessage({
             channel,
             message,
@@ -522,6 +583,34 @@ export function createMattermostMcpServer(service?: MattermostAutomationService)
             rootId = ':1'; // Default to most recent thread if none specified
           }
 
+          if (args.approved !== true) {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify(
+                    {
+                      status: 'draft_preview',
+                      requiresApproval: true,
+                      action: 'reply_thread',
+                      preview: {
+                        channel,
+                        rootId,
+                        find: args.find,
+                        message,
+                        from,
+                      },
+                      warning:
+                        "Action was NOT executed because 'approved: true' was not provided. Review this preview and call again with 'approved: true' to confirm execution.",
+                    },
+                    null,
+                    2
+                  ),
+                },
+              ],
+            };
+          }
+
           const result = await automationService.replyToMessage({
             channel,
             rootId,
@@ -553,6 +642,32 @@ export function createMattermostMcpServer(service?: MattermostAutomationService)
           const postId = String(args.postId);
           const message = String(args.message);
           const from = typeof args.from === 'string' ? args.from : undefined;
+
+          if (args.approved !== true) {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify(
+                    {
+                      status: 'draft_preview',
+                      requiresApproval: true,
+                      action: 'edit_message',
+                      preview: {
+                        postId,
+                        message,
+                        from,
+                      },
+                      warning:
+                        "Action was NOT executed because 'approved: true' was not provided. Review this preview and call again with 'approved: true' to confirm execution.",
+                    },
+                    null,
+                    2
+                  ),
+                },
+              ],
+            };
+          }
 
           const actionResult = await automationService.executeAction({
             action: 'edit_message',
@@ -864,6 +979,57 @@ export function createMattermostMcpServer(service?: MattermostAutomationService)
               {
                 type: 'text',
                 text: JSON.stringify(result, null, 2),
+              },
+            ],
+          };
+        }
+
+        case 'mattermost_add_reaction': {
+          const postIdOrPermalink = String(args.postIdOrPermalink);
+          const emojiName = String(args.emojiName);
+
+          if (args.approved !== true) {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify(
+                    {
+                      status: 'draft_preview',
+                      requiresApproval: true,
+                      action: 'add_reaction',
+                      preview: {
+                        postIdOrPermalink,
+                        emojiName,
+                      },
+                      warning:
+                        "Action was NOT executed because 'approved: true' was not provided. Review this preview and call again with 'approved: true' to confirm execution.",
+                    },
+                    null,
+                    2
+                  ),
+                },
+              ],
+            };
+          }
+
+          const result = await automationService.addReaction(postIdOrPermalink, emojiName);
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(
+                  {
+                    success: true,
+                    userId: result.userId,
+                    postId: result.postId,
+                    emojiName: result.emojiName,
+                    createAt: result.createAt,
+                  },
+                  null,
+                  2
+                ),
               },
             ],
           };
