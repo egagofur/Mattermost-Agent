@@ -8,6 +8,8 @@ export function sanitizeSecret(input: string): string {
     .replace(/(MATTERMOST_TOKEN\s*=\s*)([^\s]+)/gi, '$1[REDACTED]')
     .replace(/(token\s*[:=]\s*)(["']?)[A-Za-z0-9_-]+(["']?)/gi, '$1[REDACTED]')
     .replace(/(MMAUTHTOKEN\s*=\s*)([A-Za-z0-9_-]+)/gi, '$1[REDACTED]')
+    .replace(/(MMCSRF\s*=\s*)([A-Za-z0-9_-]+)/gi, '$1[REDACTED]')
+    .replace(/(X-CSRF-Token\s*[:=]\s*)([^\s]+)/gi, '$1[REDACTED]')
     .replace(/(password\s*[:=]\s*)(["']?)[^\s"',]+(["']?)/gi, '$1[REDACTED]');
 }
 

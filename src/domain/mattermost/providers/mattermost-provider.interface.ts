@@ -48,6 +48,21 @@ export interface MattermostProvider {
   getMessages(input: GetMessagesInput): Promise<Post[]>;
 
   /**
+   * Retrieves raw posts in a thread given a post ID or thread root ID.
+   */
+  getPostThread(postId: string): Promise<{ order: string[]; posts: Record<string, Post> }>;
+
+  /**
+   * Searches posts matching terms (e.g. '@username').
+   */
+  searchPosts(terms: string, options?: { teamId?: string; isOrSearch?: boolean }): Promise<Post[]>;
+
+  /**
+   * Batch fetches user profiles by an array of user IDs.
+   */
+  getUsersByIds?(userIds: string[]): Promise<User[]>;
+
+  /**
    * Optional cleanup hook for releasing resources (e.g. browser context).
    */
   close?(): Promise<void>;

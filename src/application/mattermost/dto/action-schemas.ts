@@ -45,6 +45,19 @@ export const EditMessageActionSchema = z.object({
   from: z.string().optional(),
 });
 
+export const GetThreadActionSchema = z.object({
+  action: z.literal('get_thread'),
+  permalinkOrId: z.string().min(1, 'Post permalink or ID is required.'),
+  limit: z.number().int().min(1).max(500).optional().default(200),
+});
+
+export const GetMentionsActionSchema = z.object({
+  action: z.literal('get_mentions'),
+  since: z.number().int().positive().optional(),
+  limit: z.number().int().min(1).max(200).optional().default(50),
+  teamId: z.string().optional(),
+});
+
 export const MattermostActionSchema = z.discriminatedUnion('action', [
   SendMessageActionSchema,
   ReplyToMessageActionSchema,
@@ -52,6 +65,8 @@ export const MattermostActionSchema = z.discriminatedUnion('action', [
   ReadChannelActionSchema,
   GetChannelActionSchema,
   WhoamiActionSchema,
+  GetThreadActionSchema,
+  GetMentionsActionSchema,
 ]);
 
 export type SendMessageAction = z.infer<typeof SendMessageActionSchema>;
@@ -60,6 +75,8 @@ export type EditMessageAction = z.infer<typeof EditMessageActionSchema>;
 export type ReadChannelAction = z.infer<typeof ReadChannelActionSchema>;
 export type GetChannelAction = z.infer<typeof GetChannelActionSchema>;
 export type WhoamiAction = z.infer<typeof WhoamiActionSchema>;
+export type GetThreadAction = z.infer<typeof GetThreadActionSchema>;
+export type GetMentionsAction = z.infer<typeof GetMentionsActionSchema>;
 export type MattermostAction = z.infer<typeof MattermostActionSchema>;
 
 export interface ActionResult<T = unknown> {

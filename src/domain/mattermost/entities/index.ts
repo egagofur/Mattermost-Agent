@@ -28,6 +28,21 @@ export interface Channel {
   purpose?: string;
 }
 
+export interface PostAttachment {
+  id: string;
+  name: string;
+  size?: number;
+  mimeType?: string;
+  extension?: string;
+}
+
+export interface PostReaction {
+  userId: string;
+  postId: string;
+  emojiName: string;
+  createAt?: number;
+}
+
 export interface Post {
   id: string;
   createAt: number;
@@ -40,6 +55,9 @@ export interface Post {
   type?: string;
   hashtags?: string;
   props?: Record<string, unknown>;
+  fileIds?: string[];
+  files?: PostAttachment[];
+  reactions?: PostReaction[];
 }
 
 export interface SendMessageInput {
@@ -91,5 +109,49 @@ export interface EditMessageResult {
   userId: string;
   message: string;
   updatedAt: Date;
+}
+
+export interface ThreadPostItem {
+  id: string;
+  rootId?: string;
+  channelId: string;
+  userId: string;
+  username: string;
+  createAt: number;
+  updateAt?: number;
+  message: string;
+  files?: PostAttachment[];
+  reactions?: PostReaction[];
+}
+
+export interface ThreadViewResult {
+  rootId: string;
+  channelId: string;
+  totalPosts: number;
+  truncated: boolean;
+  posts: ThreadPostItem[];
+}
+
+export interface GetMentionsInput {
+  since?: number;
+  limit?: number;
+  teamId?: string;
+}
+
+export interface UserMentionItem {
+  id: string;
+  rootId?: string;
+  channelId: string;
+  channelName?: string;
+  userId: string;
+  username: string;
+  message: string;
+  createAt: number;
+  hasReplied: boolean;
+}
+
+export interface MentionsResult {
+  total: number;
+  mentions: UserMentionItem[];
 }
 

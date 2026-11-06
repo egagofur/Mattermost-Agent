@@ -56,6 +56,22 @@ export interface MattermostRawPost {
   type?: string;
   hashtags?: string;
   props?: Record<string, unknown>;
+  file_ids?: string[];
+  metadata?: {
+    files?: Array<{
+      id: string;
+      name: string;
+      size?: number;
+      mime_type?: string;
+      extension?: string;
+    }>;
+    reactions?: Array<{
+      user_id: string;
+      post_id: string;
+      emoji_name: string;
+      create_at?: number;
+    }>;
+  };
 }
 
 export interface MattermostRawPostList {
@@ -289,5 +305,30 @@ export class MattermostApiClient {
       params.set('since', since.toString());
     }
     return this.request<MattermostRawPostList>(`/api/v4/channels/${encodeURIComponent(channelId)}/posts?${params.toString()}`);
+  }
+
+  public async getPostThread(postId: string): Promise<MattermostRawPostList> {
+    return this.request<MattermostRawPostList>(`/api/v4/posts/${encodeURIComponent(postId)}/thread`);
+  }
+
+  public async searchPosts(terms: string, teamId?: string, isOrSearch = false): Promise<MattermostRawPostList> {
+    const path = teamId
+      ? `/api/v4/teams/${encodeURIComponent(teamId)}/posts/search`
+      : '/api/v4/posts/search';
+    return this.request<MattermostRawPostList>(path, {
+      method: 'POST',
+      body: {
+        terms,
+        is_or_search: isOrSearch,
+      },
+    });
+  }
+
+  public async getUsersByIds(userIds: string[]): Promise<MattermostRawUser[]> {
+    if (!userIds || userIds.length === 0) return [];
+    return this.request<MattermostRawUser[]>('/api/v4/users/ids', {
+      method: 'POST',
+      body: userIds,
+    });
   }
 }

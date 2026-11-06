@@ -1,9 +1,16 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { Post } from '../../../domain/mattermost/entities';
+import {
+  MentionsResult,
+  Post,
+  ThreadPostItem,
+  ThreadViewResult,
+  UserMentionItem,
+} from '../../../domain/mattermost/entities';
 import { MattermostError, MattermostValidationError } from '../../../domain/mattermost/errors';
 import { MattermostProvider } from '../../../domain/mattermost/providers/mattermost-provider.interface';
 import { Logger, defaultLogger } from './logger';
+import { UserCacheService } from './user-cache';
 
 export interface ThreadSummary {
   index: number;
@@ -33,12 +40,14 @@ export class ThreadService {
   private provider: MattermostProvider;
   private logger: Logger;
   private stateFilePath: string;
+  private userCache: UserCacheService;
 
-  constructor(provider: MattermostProvider, logger?: Logger, stateDir?: string) {
+  constructor(provider: MattermostProvider, logger?: Logger, stateDir?: string, userCache?: UserCacheService) {
     this.provider = provider;
     this.logger = logger ?? defaultLogger;
     const baseDir = stateDir || path.resolve(process.cwd(), 'data');
     this.stateFilePath = path.join(baseDir, 'last_thread.json');
+    this.userCache = userCache ?? new UserCacheService(this.provider, this.logger);
   }
 
   /**
@@ -72,8 +81,8 @@ export class ThreadService {
       return trimmed;
     }
 
-    // Permalink matching: /pl/<id> or /posts/<id> or #<id>
-    const match = trimmed.match(/(?:\/pl\/|\/posts\/|#)([a-z0-9]{26})/i);
+    // Permalink matching: /pl/<id> or /posts/<id> or #<id> (exact 26-char hash)
+    const match = trimmed.match(/(?:\/pl\/|\/posts\/|#)([a-z0-9]{26})(?![a-z0-9])/i);
     if (match && match[1]) {
       return match[1];
     }
@@ -298,4 +307,141 @@ export class ThreadService {
     }
     return null;
   }
+
+  /**
+   * Retrieves and formats the full sequential thread view for a given post permalink or ID.
+   */
+  public async getThreadView(permalinkOrId: string, options?: { limit?: number }): Promise<ThreadViewResult> {
+    const postId = ThreadService.extractPostIdFromPermalink(permalinkOrId);
+    if (!postId) {
+      throw new MattermostValidationError(`Invalid post identifier or permalink: '${permalinkOrId}'`);
+    }
+
+    this.logger.debug(`Fetching thread view for post ID '${postId}'...`);
+    const rawThread = await this.provider.getPostThread(postId);
+
+    if (!rawThread || !rawThread.posts || Object.keys(rawThread.posts).length === 0) {
+      throw new MattermostValidationError(`No thread found for post '${postId}'.`);
+    }
+
+    // 1. Filter out deleted posts and sort chronologically
+    const allPosts = Object.values(rawThread.posts).filter((p) => !p.deleteAt || p.deleteAt === 0);
+    allPosts.sort((a, b) => a.createAt - b.createAt);
+
+    // 2. Identify root post (first post without rootId, or matches postId, or oldest post)
+    const rootPost = allPosts.find((p) => !p.rootId || p.rootId === '') || allPosts[0];
+    const rootId = rootPost ? (rootPost.rootId || rootPost.id) : postId;
+    const channelId = rootPost?.channelId || '';
+
+    // 3. Truncation calculation
+    const limit = options?.limit ?? 200;
+    const totalPosts = allPosts.length;
+    const truncated = totalPosts > limit;
+    const selectedPosts = truncated ? allPosts.slice(0, limit) : allPosts;
+
+    // 4. Batch resolve usernames
+    const userIds = selectedPosts.map((p) => p.userId);
+    await this.userCache.resolveUsers(userIds);
+
+    const posts: ThreadPostItem[] = selectedPosts.map((p) => ({
+      id: p.id,
+      rootId: p.rootId || undefined,
+      channelId: p.channelId,
+      userId: p.userId,
+      username: this.userCache.getUsername(p.userId),
+      createAt: p.createAt,
+      updateAt: p.updateAt,
+      message: p.message,
+      files: p.files && p.files.length > 0 ? p.files : undefined,
+      reactions: p.reactions && p.reactions.length > 0 ? p.reactions : undefined,
+    }));
+
+    return {
+      rootId,
+      channelId,
+      totalPosts,
+      truncated,
+      posts,
+    };
+  }
+
+  /**
+   * Retrieves posts mentioning the authenticated user with status on whether user already replied.
+   */
+  public async getMentions(options?: { since?: number; limit?: number; teamId?: string }): Promise<MentionsResult> {
+    const me = await this.provider.getMe();
+    this.userCache.primeUser(me);
+
+    const username = me.username;
+    if (!username) {
+      throw new MattermostValidationError('Cannot search mentions: authenticated user does not have a valid username.');
+    }
+    const searchTerms = `@${username}`;
+    this.logger.debug(`Searching posts mentioning '${searchTerms}'...`);
+
+    const searchResults = await this.provider.searchPosts(searchTerms, { teamId: options?.teamId });
+
+    // 1. Filter by since (default 24h)
+    const since = options?.since ?? (Date.now() - 24 * 60 * 60 * 1000);
+    const limit = options?.limit ?? 50;
+
+    const filtered = (searchResults || [])
+      .filter((p) => (!p.deleteAt || p.deleteAt === 0) && p.createAt >= since)
+      .sort((a, b) => b.createAt - a.createAt)
+      .slice(0, limit);
+
+    if (filtered.length === 0) {
+      return { total: 0, mentions: [] };
+    }
+
+    // 2. Batch resolve usernames
+    const userIds = filtered.map((p) => p.userId);
+    await this.userCache.resolveUsers(userIds);
+
+    // 3. Check hasReplied for each thread
+    const threadPostsCache = new Map<string, Post[]>();
+    const repliedMap = new Map<string, boolean>();
+
+    for (const post of filtered) {
+      const rootId = post.rootId || post.id;
+      let threadPosts = threadPostsCache.get(rootId);
+
+      if (!threadPosts) {
+        try {
+          const threadRes = await this.provider.getPostThread(rootId);
+          if (threadRes && threadRes.posts) {
+            threadPosts = Object.values(threadRes.posts).filter((p) => !p.deleteAt || p.deleteAt === 0);
+          } else {
+            threadPosts = [];
+          }
+        } catch {
+          threadPosts = [];
+        }
+        threadPostsCache.set(rootId, threadPosts);
+      }
+
+      // Check if current user has replied in this thread after the mention
+      const hasReplied = threadPosts.some(
+        (p) => p.userId === me.id && p.id !== post.id && p.createAt >= post.createAt
+      );
+      repliedMap.set(post.id, hasReplied);
+    }
+
+    const mentions: UserMentionItem[] = filtered.map((p) => ({
+      id: p.id,
+      rootId: p.rootId || undefined,
+      channelId: p.channelId,
+      userId: p.userId,
+      username: this.userCache.getUsername(p.userId),
+      message: p.message,
+      createAt: p.createAt,
+      hasReplied: repliedMap.get(p.id) || false,
+    }));
+
+    return {
+      total: mentions.length,
+      mentions,
+    };
+  }
 }
+

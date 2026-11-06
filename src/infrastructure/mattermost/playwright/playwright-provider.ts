@@ -497,6 +497,180 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
     }));
   }
 
+  public async getPostThread(postId: string): Promise<{ order: string[]; posts: Record<string, Post> }> {
+    await this.ensureAuthenticated();
+    const page = await this.webClient.getPage();
+
+    try {
+      const rawThread = await page.evaluate(async (targetPostId) => {
+        const res = await fetch(`/api/v4/posts/${encodeURIComponent(targetPostId)}/thread`, {
+          credentials: 'include',
+        });
+        if (res.ok) {
+          return res.json();
+        }
+        return null;
+      }, postId);
+
+      const posts: Record<string, Post> = {};
+      if (rawThread && rawThread.posts) {
+        for (const [id, p] of Object.entries(rawThread.posts as Record<string, any>)) {
+          posts[id] = {
+            id: p.id,
+            createAt: p.create_at,
+            updateAt: p.update_at,
+            deleteAt: p.delete_at,
+            userId: p.user_id,
+            channelId: p.channel_id,
+            rootId: p.root_id,
+            message: p.message,
+            type: p.type,
+            hashtags: p.hashtags,
+            props: p.props,
+            fileIds: p.file_ids,
+            files: p.metadata?.files?.map((f: any) => ({
+              id: f.id,
+              name: f.name,
+              size: f.size,
+              mimeType: f.mime_type,
+              extension: f.extension,
+            })),
+            reactions: p.metadata?.reactions?.map((r: any) => ({
+              userId: r.user_id,
+              postId: r.post_id,
+              emojiName: r.emoji_name,
+              createAt: r.create_at,
+            })),
+          };
+        }
+      }
+
+      return {
+        order: rawThread?.order || [],
+        posts,
+      };
+    } catch (err) {
+      throw new MattermostProviderError(
+        `Failed to retrieve thread for post '${postId}' via browser session: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+
+  public async searchPosts(terms: string, options?: { teamId?: string; isOrSearch?: boolean }): Promise<Post[]> {
+    await this.ensureAuthenticated();
+    const page = await this.webClient.getPage();
+
+    try {
+      const rawSearch = await page.evaluate(
+        async ({ terms, teamId, isOrSearch }) => {
+          const url = teamId
+            ? `/api/v4/teams/${encodeURIComponent(teamId)}/posts/search`
+            : '/api/v4/posts/search';
+          const cookieMatch = document.cookie.match(/(?:^|;\s*)MMCSRF=([^;]*)/);
+          const csrfToken = cookieMatch ? decodeURIComponent(cookieMatch[1]) : '';
+          const headers: Record<string, string> = {
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest',
+          };
+          if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+
+          const res = await fetch(url, {
+            method: 'POST',
+            credentials: 'include',
+            headers,
+            body: JSON.stringify({ terms, is_or_search: isOrSearch }),
+          });
+          if (res.ok) {
+            return res.json();
+          }
+          return null;
+        },
+        { terms, teamId: options?.teamId, isOrSearch: options?.isOrSearch ?? false }
+      );
+
+      if (!rawSearch || !Array.isArray(rawSearch.order) || !rawSearch.posts) {
+        return [];
+      }
+
+      return rawSearch.order
+        .map((id: string) => rawSearch.posts[id])
+        .filter(Boolean)
+        .map((p: any) => ({
+          id: p.id,
+          createAt: p.create_at,
+          updateAt: p.update_at,
+          deleteAt: p.delete_at,
+          userId: p.user_id,
+          channelId: p.channel_id,
+          rootId: p.root_id,
+          message: p.message,
+          type: p.type,
+          hashtags: p.hashtags,
+          props: p.props,
+          fileIds: p.file_ids,
+          files: p.metadata?.files?.map((f: any) => ({
+            id: f.id,
+            name: f.name,
+            size: f.size,
+            mimeType: f.mime_type,
+            extension: f.extension,
+          })),
+          reactions: p.metadata?.reactions?.map((r: any) => ({
+            userId: r.user_id,
+            postId: r.post_id,
+            emojiName: r.emoji_name,
+            createAt: r.create_at,
+          })),
+        }));
+    } catch (err) {
+      throw new MattermostProviderError(
+        `Failed to search posts for terms '${terms}' via browser session: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+
+  public async getUsersByIds(userIds: string[]): Promise<User[]> {
+    if (!userIds || userIds.length === 0) return [];
+    await this.ensureAuthenticated();
+    const page = await this.webClient.getPage();
+
+    try {
+      const rawUsers = await page.evaluate(async (ids) => {
+        const cookieMatch = document.cookie.match(/(?:^|;\s*)MMCSRF=([^;]*)/);
+        const csrfToken = cookieMatch ? decodeURIComponent(cookieMatch[1]) : '';
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest',
+        };
+        if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+
+        const res = await fetch('/api/v4/users/ids', {
+          method: 'POST',
+          credentials: 'include',
+          headers,
+          body: JSON.stringify(ids),
+        });
+        if (res.ok) {
+          return res.json();
+        }
+        return [];
+      }, userIds);
+
+      return (rawUsers || []).map((u: any) => ({
+        id: u.id,
+        username: u.username,
+        email: u.email,
+        firstName: u.first_name,
+        lastName: u.last_name,
+        nickname: u.nickname,
+        roles: u.roles,
+        createAt: u.create_at,
+      }));
+    } catch {
+      return [];
+    }
+  }
+
   public async close(): Promise<void> {
     await this.webClient.close();
   }

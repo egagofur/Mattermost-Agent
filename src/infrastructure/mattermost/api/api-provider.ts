@@ -61,6 +61,20 @@ export class MattermostApiProvider implements MattermostProvider {
       type: raw.type,
       hashtags: raw.hashtags,
       props: raw.props,
+      fileIds: raw.file_ids,
+      files: raw.metadata?.files?.map((f) => ({
+        id: f.id,
+        name: f.name,
+        size: f.size,
+        mimeType: f.mime_type,
+        extension: f.extension,
+      })),
+      reactions: raw.metadata?.reactions?.map((r) => ({
+        userId: r.user_id,
+        postId: r.post_id,
+        emojiName: r.emoji_name,
+        createAt: r.create_at,
+      })),
     };
   }
 
@@ -173,5 +187,30 @@ export class MattermostApiProvider implements MattermostProvider {
       .map((id) => rawList.posts[id])
       .filter(Boolean)
       .map((p) => this.mapPost(p));
+  }
+
+  public async getPostThread(postId: string): Promise<{ order: string[]; posts: Record<string, Post> }> {
+    const rawList = await this.client.getPostThread(postId);
+    const posts: Record<string, Post> = {};
+    for (const [id, rawPost] of Object.entries(rawList.posts || {})) {
+      posts[id] = this.mapPost(rawPost);
+    }
+    return {
+      order: rawList.order || [],
+      posts,
+    };
+  }
+
+  public async searchPosts(terms: string, options?: { teamId?: string; isOrSearch?: boolean }): Promise<Post[]> {
+    const rawList = await this.client.searchPosts(terms, options?.teamId, options?.isOrSearch);
+    if (!rawList || !rawList.order || !rawList.posts) {
+      return [];
+    }
+    return rawList.order.map((id) => this.mapPost(rawList.posts[id])).filter(Boolean);
+  }
+
+  public async getUsersByIds(userIds: string[]): Promise<User[]> {
+    const rawUsers = await this.client.getUsersByIds(userIds);
+    return rawUsers.map((u) => this.mapUser(u));
   }
 }

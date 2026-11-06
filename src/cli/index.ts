@@ -196,7 +196,7 @@ program
       }
       targetRootId = ':last';
       if (!targetChannel || targetChannel === ':last' || targetChannel === '--last' || targetChannel === 'last') {
-        targetChannel = lastState?.channelId || 'town-square';
+        targetChannel = lastState?.channelId;
       }
     }
 
@@ -214,8 +214,20 @@ program
       if (extracted) {
         targetRootId = extracted;
         targetMessage = posRootId || posMessage || opts.message;
-        // Channel can default to town-square or let server handle
-        targetChannel = opts.channel || 'town-square';
+        if (opts.channel) {
+          targetChannel = opts.channel;
+        } else {
+          // Resolve actual channel from the thread itself instead of guessing
+          const tempService = getService();
+          try {
+            const threadView = await tempService.getThread(extracted);
+            targetChannel = threadView.channelId;
+          } catch {
+            targetChannel = '';
+          } finally {
+            await tempService.close();
+          }
+        }
       }
     }
 
@@ -345,6 +357,108 @@ program
         console.log('💡 Quick Reply Shortcuts:');
         console.log(`   • Reply to latest:   npm run reply -- ${channel.name} :1 "<your message>"`);
         console.log(`   • Reply by keyword:  npm run reply -- ${channel.name} --find "<keyword>" "<your message>"\n`);
+      }
+    } catch (err) {
+      handleError(err);
+    } finally {
+      await service.close();
+    }
+  });
+
+// thread (Read full thread sequentially)
+program
+  .command('thread <permalinkOrId>')
+  .description('Read entire sequential thread by post ID or permalink URL')
+  .option('-l, --limit <limit>', 'Maximum number of posts to fetch (default: 200)', '200')
+  .action(async (permalinkOrId, opts) => {
+    if (!permalinkOrId) {
+      console.error('\n❌ Error: Post ID or permalink URL is required.');
+      console.error('   Usage: npm run -s cli -- thread <permalinkOrId> [--limit 200] [--json]\n');
+      process.exit(1);
+    }
+
+    const service = getService();
+    try {
+      const limit = parseInt(opts.limit, 10);
+      const result = await service.getThread(permalinkOrId, isNaN(limit) ? 200 : limit);
+
+      if (program.opts().json) {
+        handleOutput(result, true);
+      } else {
+        console.log(`\n🧵 Thread: ${result.rootId} (Channel: ${result.channelId})`);
+        console.log(`   Total Posts: ${result.totalPosts}${result.truncated ? ' (Truncated: true)' : ''}\n`);
+
+        result.posts.forEach((p, idx) => {
+          const time = ThreadService.formatRelativeTime(p.createAt);
+          const author = p.username ? `@${p.username}` : p.userId;
+          console.log(`[${idx + 1}/${result.posts.length}] ${author} (${time}):`);
+          console.log(`   ${p.message.replace(/\n/g, '\n   ')}`);
+          if (p.files && p.files.length > 0) {
+            const fileList = p.files.map((f) => f.name).join(', ');
+            console.log(`   📎 Files: ${fileList}`);
+          }
+          if (p.reactions && p.reactions.length > 0) {
+            const reactionList = p.reactions.map((r) => `:${r.emojiName}:`).join(' ');
+            console.log(`   ✨ Reactions: ${reactionList}`);
+          }
+          console.log('');
+        });
+      }
+    } catch (err) {
+      handleError(err);
+    } finally {
+      await service.close();
+    }
+  });
+
+// mentions
+program
+  .command('mentions')
+  .description('List recent posts mentioning your account')
+  .option('-s, --since <since>', 'Filter mentions since duration or timestamp (e.g. 24h, 7d, 1h)', '24h')
+  .option('-l, --limit <limit>', 'Maximum number of mentions to return (default: 50)', '50')
+  .option('--team <teamId>', 'Team ID or slug')
+  .action(async (opts) => {
+    const service = getService();
+    try {
+      let sinceMs: number | undefined;
+      if (opts.since) {
+        const rawSince = String(opts.since).trim().toLowerCase();
+        const durationMatch = rawSince.match(/^(\d+)(h|d|m)$/);
+        if (durationMatch) {
+          const num = parseInt(durationMatch[1], 10);
+          const unit = durationMatch[2];
+          const multiplier = unit === 'h' ? 3600000 : unit === 'd' ? 86400000 : 60000;
+          sinceMs = Date.now() - num * multiplier;
+        } else if (/^\d+$/.test(rawSince)) {
+          sinceMs = parseInt(rawSince, 10);
+        }
+      }
+
+      const limit = parseInt(opts.limit, 10);
+      const result = await service.getMentions({
+        since: sinceMs,
+        limit: isNaN(limit) ? 50 : limit,
+        teamId: opts.team,
+      });
+
+      if (program.opts().json) {
+        handleOutput(result, true);
+      } else {
+        console.log(`\n🔔 Mentions: Found ${result.total} post(s) mentioning you\n`);
+        if (result.mentions.length === 0) {
+          console.log('   No mentions found in the specified timeframe.\n');
+          return;
+        }
+
+        result.mentions.forEach((m, idx) => {
+          const status = m.hasReplied ? '✅ REPLIED' : '⏳ UNREPLIED';
+          const time = ThreadService.formatRelativeTime(m.createAt);
+          const author = m.username ? `@${m.username}` : m.userId;
+          console.log(`[${idx + 1}] [${status}] ${author} in #${m.channelName || m.channelId} (${time}):`);
+          console.log(`    ${m.message.replace(/\n/g, '\n    ')}`);
+          console.log(`    Post ID: ${m.id} | Root ID: ${m.rootId || m.id}\n`);
+        });
       }
     } catch (err) {
       handleError(err);

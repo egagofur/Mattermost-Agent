@@ -218,6 +218,45 @@ export function createMattermostMcpServer(service?: MattermostAutomationService)
         required: ['jobName', 'enabled'],
       },
     },
+    {
+      name: 'mattermost_get_thread',
+      description: 'Retrieve the complete sequential message thread for a given post permalink URL or 26-character post ID, including user IDs, resolved usernames, timestamps, message content, attachments summary, and reactions.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          permalinkOrId: {
+            type: 'string',
+            description: 'Permalink URL (e.g. https://mattermost.com/.../pl/postid) or 26-character alphanumeric Post ID.',
+          },
+          limit: {
+            type: 'number',
+            description: 'Maximum number of posts to return (default: 200). Returns truncated: true if more posts exist.',
+          },
+        },
+        required: ['permalinkOrId'],
+      },
+    },
+    {
+      name: 'mattermost_get_mentions',
+      description: 'Retrieve recent posts mentioning the authenticated user, including user IDs, usernames, timestamps, message snippets, and whether you have already replied in the thread.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          since: {
+            type: 'number',
+            description: 'Optional timestamp in milliseconds to filter mentions after (default: last 24 hours).',
+          },
+          limit: {
+            type: 'number',
+            description: 'Maximum number of mentions to return (default: 50).',
+          },
+          teamId: {
+            type: 'string',
+            description: 'Optional team ID to restrict search.',
+          },
+        },
+      },
+    },
   ];
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -599,6 +638,39 @@ export function createMattermostMcpServer(service?: MattermostAutomationService)
                   null,
                   2
                 ),
+              },
+            ],
+          };
+        }
+
+        case 'mattermost_get_thread': {
+          const permalinkOrId = String(args.permalinkOrId || args.postId || '');
+          const limit = typeof args.limit === 'number' ? args.limit : undefined;
+
+          const result = await automationService.getThread(permalinkOrId, limit);
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(result, null, 2),
+              },
+            ],
+          };
+        }
+
+        case 'mattermost_get_mentions': {
+          const since = typeof args.since === 'number' ? args.since : undefined;
+          const limit = typeof args.limit === 'number' ? args.limit : undefined;
+          const teamId = typeof args.teamId === 'string' ? args.teamId : undefined;
+
+          const result = await automationService.getMentions({ since, limit, teamId });
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(result, null, 2),
               },
             ],
           };

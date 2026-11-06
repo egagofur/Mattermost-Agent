@@ -1,4 +1,12 @@
-import { Channel, EditMessageResult, Post, SendMessageResult, User } from '../../../domain/mattermost/entities';
+import {
+  Channel,
+  EditMessageResult,
+  MentionsResult,
+  Post,
+  SendMessageResult,
+  ThreadViewResult,
+  User,
+} from '../../../domain/mattermost/entities';
 import {
   MattermostAuthenticationError,
   MattermostError,
@@ -15,6 +23,8 @@ import {
   ActionResult,
   EditMessageAction,
   GetChannelAction,
+  GetMentionsAction,
+  GetThreadAction,
   MattermostAction,
   MattermostActionSchema,
   ReadChannelAction,
@@ -103,6 +113,12 @@ export class ActionExecutor {
           break;
         case 'whoami':
           resultData = await this.handleWhoami(action);
+          break;
+        case 'get_thread':
+          resultData = await this.handleGetThread(action);
+          break;
+        case 'get_mentions':
+          resultData = await this.handleGetMentions(action);
           break;
       }
 
@@ -297,4 +313,17 @@ export class ActionExecutor {
       from: action.from,
     });
   }
+
+  public async handleGetThread(action: GetThreadAction): Promise<ThreadViewResult> {
+    return this.threadService.getThreadView(action.permalinkOrId, { limit: action.limit });
+  }
+
+  public async handleGetMentions(action: GetMentionsAction): Promise<MentionsResult> {
+    return this.threadService.getMentions({
+      since: action.since,
+      limit: action.limit,
+      teamId: action.teamId,
+    });
+  }
 }
+

@@ -1,5 +1,13 @@
 import { loadConfig, MattermostConfig } from '../../../config/env';
-import { Channel, EditMessageResult, Post, SendMessageResult, User } from '../../../domain/mattermost/entities';
+import {
+  Channel,
+  EditMessageResult,
+  MentionsResult,
+  Post,
+  SendMessageResult,
+  ThreadViewResult,
+  User,
+} from '../../../domain/mattermost/entities';
 import { MattermostProvider } from '../../../domain/mattermost/providers/mattermost-provider.interface';
 import { MattermostApiClient } from '../../../infrastructure/mattermost/api/client';
 import { MattermostApiProvider } from '../../../infrastructure/mattermost/api/api-provider';
@@ -235,6 +243,33 @@ export class MattermostAutomationService {
     const threadService = new ThreadService(this.provider, this.logger);
     const threads = await threadService.getChannelThreads(channel.id, params.limit || 50, params.query);
     return { channel, threads };
+  }
+
+  /**
+   * Retrieves full sequential messages in a thread from a post ID or permalink URL.
+   */
+  public async getThread(permalinkOrId: string, limit?: number): Promise<ThreadViewResult> {
+    return this.actionExecutor.handleGetThread({
+      action: 'get_thread',
+      permalinkOrId,
+      limit: limit ?? 200,
+    });
+  }
+
+  /**
+   * Retrieves posts mentioning the authenticated user.
+   */
+  public async getMentions(params?: {
+    since?: number;
+    limit?: number;
+    teamId?: string;
+  }): Promise<MentionsResult> {
+    return this.actionExecutor.handleGetMentions({
+      action: 'get_mentions',
+      since: params?.since,
+      limit: params?.limit ?? 50,
+      teamId: params?.teamId,
+    });
   }
 
   /**
