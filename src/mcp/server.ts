@@ -257,6 +257,51 @@ export function createMattermostMcpServer(service?: MattermostAutomationService)
         },
       },
     },
+    {
+      name: 'mattermost_search',
+      description: 'Search messages across accessible Mattermost channels with optional filters for user, channel, dates, and query terms.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          terms: {
+            type: 'string',
+            description: 'Keywords to search for.',
+          },
+          from: {
+            type: 'string',
+            description: 'Filter posts from a specific username (with or without @).',
+          },
+          in: {
+            type: 'string',
+            description: 'Filter posts in a specific channel name (with or without ~).',
+          },
+          after: {
+            type: 'string',
+            description: 'Filter posts after date (YYYY-MM-DD).',
+          },
+          before: {
+            type: 'string',
+            description: 'Filter posts before date (YYYY-MM-DD).',
+          },
+          limit: {
+            type: 'number',
+            description: 'Maximum number of search results to return (default: 20).',
+          },
+          teamId: {
+            type: 'string',
+            description: 'Optional team ID to restrict search.',
+          },
+        },
+      },
+    },
+    {
+      name: 'mattermost_unread_summary',
+      description: 'Retrieve summary of all channels with unread messages or mentions for your account, prioritized by mentions.',
+      inputSchema: {
+        type: 'object',
+        properties: {},
+      },
+    },
   ];
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -665,6 +710,48 @@ export function createMattermostMcpServer(service?: MattermostAutomationService)
           const teamId = typeof args.teamId === 'string' ? args.teamId : undefined;
 
           const result = await automationService.getMentions({ since, limit, teamId });
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(result, null, 2),
+              },
+            ],
+          };
+        }
+
+        case 'mattermost_search': {
+          const terms = typeof args.terms === 'string' ? args.terms : undefined;
+          const from = typeof args.from === 'string' ? args.from : undefined;
+          const inChannel = typeof args.in === 'string' ? args.in : undefined;
+          const after = typeof args.after === 'string' ? args.after : undefined;
+          const before = typeof args.before === 'string' ? args.before : undefined;
+          const limit = typeof args.limit === 'number' ? args.limit : undefined;
+          const teamId = typeof args.teamId === 'string' ? args.teamId : undefined;
+
+          const result = await automationService.search({
+            terms,
+            from,
+            in: inChannel,
+            after,
+            before,
+            limit,
+            teamId,
+          });
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(result, null, 2),
+              },
+            ],
+          };
+        }
+
+        case 'mattermost_unread_summary': {
+          const result = await automationService.getUnreadSummary();
 
           return {
             content: [

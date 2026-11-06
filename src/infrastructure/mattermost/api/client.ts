@@ -331,4 +331,12 @@ export class MattermostApiClient {
       body: userIds,
     });
   }
+
+  public async getMyChannels(): Promise<MattermostRawChannel[]> {
+    return this.request<MattermostRawChannel[]>('/api/v4/users/me/channels');
+  }
+
+  public async getChannelMembersForTeam(teamId: string): Promise<any[]> {
+    return this.request<any[]>(`/api/v4/users/me/teams/${encodeURIComponent(teamId)}/channels/members`);
+  }
 }

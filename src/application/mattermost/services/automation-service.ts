@@ -4,8 +4,11 @@ import {
   EditMessageResult,
   MentionsResult,
   Post,
+  SearchFilterOptions,
+  SearchPostsResult,
   SendMessageResult,
   ThreadViewResult,
+  UnreadSummaryResult,
   User,
 } from '../../../domain/mattermost/entities';
 import { MattermostProvider } from '../../../domain/mattermost/providers/mattermost-provider.interface';
@@ -270,6 +273,37 @@ export class MattermostAutomationService {
       limit: params?.limit ?? 50,
       teamId: params?.teamId,
     });
+  }
+
+  /**
+   * Searches posts matching terms and filters.
+   */
+  public async search(options: SearchFilterOptions): Promise<SearchPostsResult> {
+    return this.actionExecutor.handleSearch({
+      action: 'search',
+      terms: options.terms,
+      from: options.from,
+      in: options.in,
+      after: options.after,
+      before: options.before,
+      limit: options.limit ?? 20,
+      teamId: options.teamId,
+      isOrSearch: options.isOrSearch,
+    });
+  }
+
+  /**
+   * Retrieves summary of unread messages and mentions across channels.
+   */
+  public async getUnreadSummary(): Promise<UnreadSummaryResult> {
+    return this.actionExecutor.handleUnreadSummary();
+  }
+
+  /**
+   * Resolves channel identifier to Channel object without sending messages (used for previews/safety checks).
+   */
+  public async resolveChannel(channelIdentifier: string, teamId?: string): Promise<Channel> {
+    return this.channelResolver.resolve(channelIdentifier, teamId);
   }
 
   /**

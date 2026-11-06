@@ -8,6 +8,7 @@ import {
   ReplyToMessageInput,
   SendMessageInput,
   SendMessageResult,
+  UnreadSummaryResult,
   User,
 } from '../../../domain/mattermost/entities';
 import { MattermostProvider } from '../../../domain/mattermost/providers/mattermost-provider.interface';
@@ -212,5 +213,52 @@ export class MattermostApiProvider implements MattermostProvider {
   public async getUsersByIds(userIds: string[]): Promise<User[]> {
     const rawUsers = await this.client.getUsersByIds(userIds);
     return rawUsers.map((u) => this.mapUser(u));
+  }
+
+  public async getUnreadSummary(): Promise<UnreadSummaryResult> {
+    const teams = await this.client.getMyTeams();
+    const channels = await this.client.getMyChannels();
+
+    let allMembers: any[] = [];
+    for (const team of teams) {
+      try {
+        const members = await this.client.getChannelMembersForTeam(team.id);
+        allMembers.push(...members);
+      } catch (err) {
+        this.logger.debug(`Could not fetch channel members for team ${team.id}`);
+      }
+    }
+
+    const unreads: any[] = [];
+    for (const m of allMembers) {
+      const chan = channels.find((c) => c.id === m.channel_id);
+      if (chan) {
+        const unreadCount = Math.max(0, ((chan as any).total_msg_count || 0) - (m.msg_count || 0));
+        const mentionCount = m.mention_count || 0;
+        if (unreadCount > 0 || mentionCount > 0) {
+          unreads.push({
+            channelId: chan.id,
+            channelName: chan.name,
+            displayName: chan.display_name || chan.name,
+            type: chan.type,
+            teamId: chan.team_id,
+            unreadCount,
+            mentionCount,
+            hasMention: mentionCount > 0,
+          });
+        }
+      }
+    }
+
+    unreads.sort((a, b) => {
+      if (a.hasMention !== b.hasMention) return a.hasMention ? -1 : 1;
+      if (b.mentionCount !== a.mentionCount) return b.mentionCount - a.mentionCount;
+      return b.unreadCount - a.unreadCount;
+    });
+
+    return {
+      totalUnreadChannels: unreads.length,
+      channels: unreads,
+    };
   }
 }

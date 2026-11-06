@@ -3,6 +3,8 @@ import * as path from 'path';
 import {
   MentionsResult,
   Post,
+  SearchFilterOptions,
+  SearchPostsResult,
   ThreadPostItem,
   ThreadViewResult,
   UserMentionItem,
@@ -441,6 +443,66 @@ export class ThreadService {
     return {
       total: mentions.length,
       mentions,
+    };
+  }
+
+  /**
+   * Searches posts across channels matching terms and filters (from, in, after, before).
+   */
+  public async searchPosts(options: SearchFilterOptions): Promise<SearchPostsResult> {
+    const parts: string[] = [];
+    if (options.terms && options.terms.trim()) {
+      parts.push(options.terms.trim());
+    }
+    if (options.from && options.from.trim()) {
+      parts.push(`from:${options.from.trim().replace(/^@/, '')}`);
+    }
+    if (options.in && options.in.trim()) {
+      parts.push(`in:${options.in.trim().replace(/^~/, '')}`);
+    }
+    if (options.after && options.after.trim()) {
+      parts.push(`after:${options.after.trim()}`);
+    }
+    if (options.before && options.before.trim()) {
+      parts.push(`before:${options.before.trim()}`);
+    }
+
+    const query = parts.join(' ').trim();
+    if (!query) {
+      throw new MattermostValidationError('Search query cannot be empty. Provide terms, from, in, after, or before filter.');
+    }
+
+    this.logger.debug(`Searching posts with query: '${query}'...`);
+    const searchResults = await this.provider.searchPosts(query, {
+      teamId: options.teamId,
+      isOrSearch: options.isOrSearch,
+    });
+
+    const limit = options.limit ?? 20;
+    const filtered = (searchResults || [])
+      .filter((p) => !p.deleteAt || p.deleteAt === 0)
+      .slice(0, limit);
+
+    const userIds = filtered.map((p) => p.userId);
+    await this.userCache.resolveUsers(userIds);
+
+    const posts: ThreadPostItem[] = filtered.map((p) => ({
+      id: p.id,
+      rootId: p.rootId || undefined,
+      channelId: p.channelId,
+      userId: p.userId,
+      username: this.userCache.getUsername(p.userId),
+      createAt: p.createAt,
+      updateAt: p.updateAt,
+      message: p.message,
+      files: p.files && p.files.length > 0 ? p.files : undefined,
+      reactions: p.reactions && p.reactions.length > 0 ? p.reactions : undefined,
+    }));
+
+    return {
+      total: posts.length,
+      query,
+      posts,
     };
   }
 }

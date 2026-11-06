@@ -155,3 +155,70 @@ export interface MentionsResult {
   mentions: UserMentionItem[];
 }
 
+export interface SearchFilterOptions {
+  terms?: string;
+  from?: string;
+  in?: string;
+  after?: string;
+  before?: string;
+  limit?: number;
+  teamId?: string;
+  isOrSearch?: boolean;
+}
+
+export interface SearchPostsResult {
+  total: number;
+  query: string;
+  posts: ThreadPostItem[];
+}
+
+export interface UnreadChannelSummary {
+  channelId: string;
+  channelName: string;
+  displayName: string;
+  type: string;
+  teamId?: string;
+  unreadCount: number;
+  mentionCount: number;
+  hasMention: boolean;
+}
+
+export interface UnreadSummaryResult {
+  totalUnreadChannels: number;
+  channels: UnreadChannelSummary[];
+}
+
+export interface PostContextResult {
+  post: ThreadPostItem;
+  before: ThreadPostItem[];
+  after: ThreadPostItem[];
+  totalContextPosts: number;
+}
+
+export interface ReactionResult {
+  userId: string;
+  postId: string;
+  emojiName: string;
+  createAt: number;
+}
+
+export interface UserProfileResult {
+  id: string;
+  username: string;
+  email?: string;
+  firstName?: string;
+  lastName?: string;
+  nickname?: string;
+  position?: string;
+  roles?: string;
+  createAt?: number;
+}
+
+export interface FileDownloadResult {
+  fileId: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+  savedPath: string;
+}
+

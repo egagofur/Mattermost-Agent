@@ -8,6 +8,7 @@ import {
   ReplyToMessageInput,
   SendMessageInput,
   SendMessageResult,
+  UnreadSummaryResult,
   User,
 } from '../../../domain/mattermost/entities';
 import {
@@ -668,6 +669,66 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
       }));
     } catch {
       return [];
+    }
+  }
+
+  public async getUnreadSummary(): Promise<UnreadSummaryResult> {
+    await this.ensureAuthenticated();
+    const page = await this.webClient.getPage();
+
+    try {
+      const res = await page.evaluate(async () => {
+        const teamsRes = await fetch('/api/v4/users/me/teams', { credentials: 'include' });
+        const teams = teamsRes.ok ? await teamsRes.json() : [];
+        const channelsRes = await fetch('/api/v4/users/me/channels', { credentials: 'include' });
+        const channels = channelsRes.ok ? await channelsRes.json() : [];
+
+        let allMembers: any[] = [];
+        for (const t of teams) {
+          const mRes = await fetch(`/api/v4/users/me/teams/${t.id}/channels/members`, { credentials: 'include' });
+          if (mRes.ok) {
+            const m = await mRes.json();
+            allMembers.push(...m);
+          }
+        }
+
+        const unreads: any[] = [];
+        for (const m of allMembers) {
+          const chan = channels.find((c: any) => c.id === m.channel_id);
+          if (chan) {
+            const unreadCount = Math.max(0, (chan.total_msg_count || 0) - (m.msg_count || 0));
+            const mentionCount = m.mention_count || 0;
+            if (unreadCount > 0 || mentionCount > 0) {
+              unreads.push({
+                channelId: chan.id,
+                channelName: chan.name,
+                displayName: chan.display_name || chan.name,
+                type: chan.type,
+                teamId: chan.team_id || undefined,
+                unreadCount,
+                mentionCount,
+                hasMention: mentionCount > 0,
+              });
+            }
+          }
+        }
+        return unreads;
+      });
+
+      res.sort((a: any, b: any) => {
+        if (a.hasMention !== b.hasMention) return a.hasMention ? -1 : 1;
+        if (b.mentionCount !== a.mentionCount) return b.mentionCount - a.mentionCount;
+        return b.unreadCount - a.unreadCount;
+      });
+
+      return {
+        totalUnreadChannels: res.length,
+        channels: res,
+      };
+    } catch (err) {
+      throw new MattermostProviderError(
+        `Failed to retrieve unread summary via browser session: ${err instanceof Error ? err.message : String(err)}`
+      );
     }
   }
 

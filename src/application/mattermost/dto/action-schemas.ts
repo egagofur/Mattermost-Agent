@@ -58,6 +58,22 @@ export const GetMentionsActionSchema = z.object({
   teamId: z.string().optional(),
 });
 
+export const SearchActionSchema = z.object({
+  action: z.literal('search'),
+  terms: z.string().optional(),
+  from: z.string().optional(),
+  in: z.string().optional(),
+  after: z.string().optional(),
+  before: z.string().optional(),
+  limit: z.number().int().min(1).max(200).optional().default(20),
+  teamId: z.string().optional(),
+  isOrSearch: z.boolean().optional(),
+});
+
+export const UnreadSummaryActionSchema = z.object({
+  action: z.literal('unread_summary'),
+});
+
 export const MattermostActionSchema = z.discriminatedUnion('action', [
   SendMessageActionSchema,
   ReplyToMessageActionSchema,
@@ -67,6 +83,8 @@ export const MattermostActionSchema = z.discriminatedUnion('action', [
   WhoamiActionSchema,
   GetThreadActionSchema,
   GetMentionsActionSchema,
+  SearchActionSchema,
+  UnreadSummaryActionSchema,
 ]);
 
 export type SendMessageAction = z.infer<typeof SendMessageActionSchema>;
@@ -77,6 +95,8 @@ export type GetChannelAction = z.infer<typeof GetChannelActionSchema>;
 export type WhoamiAction = z.infer<typeof WhoamiActionSchema>;
 export type GetThreadAction = z.infer<typeof GetThreadActionSchema>;
 export type GetMentionsAction = z.infer<typeof GetMentionsActionSchema>;
+export type SearchAction = z.infer<typeof SearchActionSchema>;
+export type UnreadSummaryAction = z.infer<typeof UnreadSummaryActionSchema>;
 export type MattermostAction = z.infer<typeof MattermostActionSchema>;
 
 export interface ActionResult<T = unknown> {

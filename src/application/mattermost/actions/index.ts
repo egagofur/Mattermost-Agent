@@ -3,14 +3,17 @@ import {
   EditMessageResult,
   MentionsResult,
   Post,
+  SearchPostsResult,
   SendMessageResult,
   ThreadViewResult,
+  UnreadSummaryResult,
   User,
 } from '../../../domain/mattermost/entities';
 import {
   MattermostAuthenticationError,
   MattermostError,
   MattermostIdentityMismatchError,
+  MattermostProviderError,
   MattermostValidationError,
 } from '../../../domain/mattermost/errors';
 import { MattermostProvider } from '../../../domain/mattermost/providers/mattermost-provider.interface';
@@ -29,7 +32,9 @@ import {
   MattermostActionSchema,
   ReadChannelAction,
   ReplyToMessageAction,
+  SearchAction,
   SendMessageAction,
+  UnreadSummaryAction,
   WhoamiAction,
 } from '../dto/action-schemas';
 
@@ -119,6 +124,12 @@ export class ActionExecutor {
           break;
         case 'get_mentions':
           resultData = await this.handleGetMentions(action);
+          break;
+        case 'search':
+          resultData = await this.handleSearch(action);
+          break;
+        case 'unread_summary':
+          resultData = await this.handleUnreadSummary(action);
           break;
       }
 
@@ -324,6 +335,26 @@ export class ActionExecutor {
       limit: action.limit,
       teamId: action.teamId,
     });
+  }
+
+  public async handleSearch(action: SearchAction): Promise<SearchPostsResult> {
+    return this.threadService.searchPosts({
+      terms: action.terms,
+      from: action.from,
+      in: action.in,
+      after: action.after,
+      before: action.before,
+      limit: action.limit,
+      teamId: action.teamId,
+      isOrSearch: action.isOrSearch,
+    });
+  }
+
+  public async handleUnreadSummary(_action?: UnreadSummaryAction): Promise<UnreadSummaryResult> {
+    if (this.provider.getUnreadSummary) {
+      return this.provider.getUnreadSummary();
+    }
+    throw new MattermostProviderError('The configured provider does not support retrieving unread summaries.');
   }
 }
 

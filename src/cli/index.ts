@@ -467,6 +467,86 @@ program
     }
   });
 
+// search
+program
+  .command('search [terms...]')
+  .description('Search posts across accessible channels with optional user, channel, and date filters')
+  .option('-f, --from <user>', 'Filter by author username')
+  .option('-c, --in <channel>', 'Filter by channel name')
+  .option('-a, --after <date>', 'Filter after date (YYYY-MM-DD)')
+  .option('-b, --before <date>', 'Filter before date (YYYY-MM-DD)')
+  .option('-l, --limit <limit>', 'Maximum number of results to return (default: 20)', '20')
+  .option('--team <teamId>', 'Team ID or slug')
+  .action(async (termsArray, opts) => {
+    const rawTerms = Array.isArray(termsArray) ? termsArray.join(' ') : termsArray || '';
+    const service = getService();
+    try {
+      const limit = parseInt(opts.limit, 10);
+      const result = await service.search({
+        terms: rawTerms || undefined,
+        from: opts.from,
+        in: opts.in,
+        after: opts.after,
+        before: opts.before,
+        limit: isNaN(limit) ? 20 : limit,
+        teamId: opts.team,
+      });
+
+      if (program.opts().json) {
+        handleOutput(result, true);
+      } else {
+        console.log(`\n🔍 Search Results: Found ${result.total} post(s) for query: "${result.query}"\n`);
+        if (result.posts.length === 0) {
+          console.log('   No matching posts found.\n');
+          return;
+        }
+
+        result.posts.forEach((p, idx) => {
+          const time = ThreadService.formatRelativeTime(p.createAt);
+          const author = p.username ? `@${p.username}` : p.userId;
+          console.log(`[${idx + 1}/${result.posts.length}] ${author} in #${p.channelId} (${time}):`);
+          console.log(`   ${p.message.replace(/\n/g, '\n   ')}`);
+          console.log(`   Post ID: ${p.id}${p.rootId ? ` | Root ID: ${p.rootId}` : ''}\n`);
+        });
+      }
+    } catch (err) {
+      handleError(err);
+    } finally {
+      await service.close();
+    }
+  });
+
+// unread
+program
+  .command('unread')
+  .description('Summarize all channels with unread messages or mentions')
+  .action(async () => {
+    const service = getService();
+    try {
+      const result = await service.getUnreadSummary();
+
+      if (program.opts().json) {
+        handleOutput(result, true);
+      } else {
+        console.log(`\n📬 Unread Channels: ${result.totalUnreadChannels} channel(s) with unread messages/mentions\n`);
+        if (result.channels.length === 0) {
+          console.log('   All caught up! No unread messages or mentions.\n');
+          return;
+        }
+
+        result.channels.forEach((c, idx) => {
+          const mentionBadge = c.hasMention ? `🔴 ${c.mentionCount} MENTION(S)` : '⚪';
+          console.log(`[${idx + 1}] #${c.displayName || c.channelName} (${c.channelId}):`);
+          console.log(`    Unread Messages: ${c.unreadCount} | ${mentionBadge}\n`);
+        });
+      }
+    } catch (err) {
+      handleError(err);
+    } finally {
+      await service.close();
+    }
+  });
+
 // channel
 program
   .command('channel')
