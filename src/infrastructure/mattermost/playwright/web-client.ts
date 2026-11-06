@@ -65,7 +65,16 @@ export class MattermostWebClient {
       await page.waitForTimeout(1500);
 
       const currentUrl = page.url();
-      if (currentUrl.includes('/login') || currentUrl.includes('/landing')) {
+      if (currentUrl.includes('/landing')) {
+        const viewInBrowser = page.locator('a:has-text("View in Browser"), button:has-text("View in Browser")');
+        if (await viewInBrowser.isVisible({ timeout: 2000 }).catch(() => false)) {
+          await viewInBrowser.click();
+          await page.waitForTimeout(1500);
+        }
+      }
+
+      const updatedUrl = page.url();
+      if (updatedUrl.includes('/login')) {
         return { authenticated: false };
       }
 
@@ -119,16 +128,37 @@ export class MattermostWebClient {
 
     console.log('Waiting for login to complete... (Will close once channels view is detected)');
 
-    // Wait until URL moves away from /login and sidebar/post composer is present
-    try {
-      await page.waitForURL((url) => !url.toString().includes('/login') && !url.toString().includes('/landing'), {
-        timeout: 180000, // 3 minutes timeout for manual login
-      });
+    // Wait until user is genuinely authenticated via API check
+    const startTime = Date.now();
+    const timeoutMs = 180000; // 3 minutes
+    let loggedIn = false;
 
-      await page.waitForSelector('#post_textbox, #statusDropdown, .sidebar--left', { timeout: 30000 });
+    try {
+      while (Date.now() - startTime < timeoutMs) {
+        await page.waitForTimeout(1500);
+        const isAuth = await page.evaluate(async () => {
+          try {
+            const res = await fetch('/api/v4/users/me', { credentials: 'include' });
+            if (res.ok) {
+              const user = await res.json();
+              return !!(user && user.id);
+            }
+          } catch {}
+          return false;
+        });
+
+        if (isAuth) {
+          loggedIn = true;
+          break;
+        }
+      }
+
+      if (!loggedIn) {
+        throw new MattermostProviderError('Timed out waiting for manual login to complete in browser.', 'LOGIN_TIMEOUT');
+      }
+
       console.log('\n✅ Login successfully detected! Browser session profile has been saved.');
-    } catch (err) {
-      throw new MattermostProviderError('Timed out waiting for manual login to complete in browser.', 'LOGIN_TIMEOUT');
+      await page.waitForTimeout(2000);
     } finally {
       await context.close();
     }

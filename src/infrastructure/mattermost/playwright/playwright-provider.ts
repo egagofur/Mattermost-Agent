@@ -265,13 +265,21 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
       this.logger.debug(`Playwright: Posting message to channel '${input.channelId}' via session API...`);
       const rawPost = await page.evaluate(
         async ({ channelId, message, rootId }) => {
+          const cookieMatch = document.cookie.match(/(?:^|;\s*)MMCSRF=([^;]*)/);
+          const csrfToken = cookieMatch ? decodeURIComponent(cookieMatch[1]) : '';
+
+          const headers: Record<string, string> = {
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest',
+          };
+          if (csrfToken) {
+            headers['X-CSRF-Token'] = csrfToken;
+          }
+
           const res = await fetch('/api/v4/posts', {
             method: 'POST',
             credentials: 'include',
-            headers: {
-              'Content-Type': 'application/json',
-              'X-Requested-With': 'XMLHttpRequest',
-            },
+            headers,
             body: JSON.stringify({
               channel_id: channelId,
               message,
@@ -339,13 +347,8 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
       this.logger.debug(`Playwright: Patching post '${input.postId}' via session API...`);
       const rawPost = await page.evaluate(
         async ({ postId, message }) => {
-          const getCookie = (name: string) => {
-            const value = `; ${document.cookie}`;
-            const parts = value.split(`; ${name}=`);
-            if (parts.length === 2) return parts.pop()?.split(';').shift();
-            return '';
-          };
-          const csrfToken = getCookie('MMCSRF');
+          const cookieMatch = document.cookie.match(/(?:^|;\s*)MMCSRF=([^;]*)/);
+          const csrfToken = cookieMatch ? decodeURIComponent(cookieMatch[1]) : '';
 
           const headers: Record<string, string> = {
             'Content-Type': 'application/json',
