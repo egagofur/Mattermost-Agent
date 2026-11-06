@@ -1,7 +1,10 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import {
   Channel,
   EditMessageInput,
   EditMessageResult,
+  FileDownloadResult,
   GetChannelInput,
   GetMessagesInput,
   Post,
@@ -870,6 +873,62 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
       position: rawUser.position,
       roles: rawUser.roles,
       createAt: rawUser.create_at,
+    };
+  }
+
+  public async downloadFile(fileId: string, outputDir: string, maxSizeBytes?: number): Promise<FileDownloadResult> {
+    await this.ensureAuthenticated();
+    const cleanId = fileId.trim();
+    if (!/^[a-z0-9]{26}$/i.test(cleanId)) {
+      throw new MattermostValidationError(`Invalid file ID '${fileId}'. Expected 26-character alphanumeric string.`);
+    }
+
+    const context = await this.webClient.getContext();
+    const infoRes = await context.request.get(`${this.baseUrl}/api/v4/files/${encodeURIComponent(cleanId)}/info`);
+    if (infoRes.status() === 404) {
+      throw new MattermostValidationError(`File with ID '${cleanId}' not found.`);
+    }
+    if (!infoRes.ok()) {
+      throw new MattermostProviderError(`Failed to fetch file info: HTTP ${infoRes.status()}`);
+    }
+    const info = await infoRes.json();
+
+    const maxLimit = maxSizeBytes ?? 50 * 1024 * 1024;
+    if (info.size && info.size > maxLimit) {
+      throw new MattermostValidationError(
+        `File size (${info.size} bytes) exceeds maximum allowed limit of ${maxLimit} bytes.`
+      );
+    }
+
+    const rawName = info.name || `file_${cleanId}`;
+    const safeName = path.basename(rawName).replace(/[/\\?%*:|"<>]/g, '_');
+    const resolvedDir = path.resolve(outputDir);
+    if (!fs.existsSync(resolvedDir)) {
+      fs.mkdirSync(resolvedDir, { recursive: true });
+    }
+    const finalPath = path.resolve(resolvedDir, safeName);
+    if (!finalPath.startsWith(resolvedDir)) {
+      throw new MattermostValidationError('Path traversal attempt detected in filename.');
+    }
+
+    const dataRes = await context.request.get(`${this.baseUrl}/api/v4/files/${encodeURIComponent(cleanId)}`);
+    if (!dataRes.ok()) {
+      throw new MattermostProviderError(`Failed to download file data: HTTP ${dataRes.status()}`);
+    }
+    const buffer = await dataRes.body();
+    if (buffer.length > maxLimit) {
+      throw new MattermostValidationError(
+        `Downloaded file size (${buffer.length} bytes) exceeds maximum allowed limit of ${maxLimit} bytes.`
+      );
+    }
+
+    fs.writeFileSync(finalPath, buffer);
+    return {
+      fileId: cleanId,
+      filename: safeName,
+      mimeType: info.mime_type || 'application/octet-stream',
+      size: buffer.length,
+      savedPath: finalPath,
     };
   }
 

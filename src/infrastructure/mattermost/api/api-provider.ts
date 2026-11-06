@@ -1,7 +1,10 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import {
   Channel,
   EditMessageInput,
   EditMessageResult,
+  FileDownloadResult,
   GetChannelInput,
   GetMessagesInput,
   Post,
@@ -12,6 +15,7 @@ import {
   User,
   UserProfileResult,
 } from '../../../domain/mattermost/entities';
+import { MattermostValidationError } from '../../../domain/mattermost/errors';
 import { MattermostProvider } from '../../../domain/mattermost/providers/mattermost-provider.interface';
 import { MattermostApiClient, MattermostRawChannel, MattermostRawPost, MattermostRawUser } from './client';
 import { Logger, defaultLogger } from '../services/logger';
@@ -295,6 +299,52 @@ export class MattermostApiProvider implements MattermostProvider {
       position: rawUser.position,
       roles: rawUser.roles,
       createAt: rawUser.create_at,
+    };
+  }
+
+  public async downloadFile(fileId: string, outputDir: string, maxSizeBytes?: number): Promise<FileDownloadResult> {
+    const cleanId = fileId.trim();
+    if (!/^[a-z0-9]{26}$/i.test(cleanId)) {
+      throw new MattermostValidationError(`Invalid file ID '${fileId}'. Expected 26-character alphanumeric string.`);
+    }
+
+    const info = await this.client.getFileInfo(cleanId);
+    if (!info) {
+      throw new MattermostValidationError(`File with ID '${cleanId}' not found.`);
+    }
+
+    const maxLimit = maxSizeBytes ?? 50 * 1024 * 1024;
+    if (info.size && info.size > maxLimit) {
+      throw new MattermostValidationError(
+        `File size (${info.size} bytes) exceeds maximum allowed limit of ${maxLimit} bytes.`
+      );
+    }
+
+    const rawName = info.name || `file_${cleanId}`;
+    const safeName = path.basename(rawName).replace(/[/\\?%*:|"<>]/g, '_');
+    const resolvedDir = path.resolve(outputDir);
+    if (!fs.existsSync(resolvedDir)) {
+      fs.mkdirSync(resolvedDir, { recursive: true });
+    }
+    const finalPath = path.resolve(resolvedDir, safeName);
+    if (!finalPath.startsWith(resolvedDir)) {
+      throw new MattermostValidationError('Path traversal attempt detected in filename.');
+    }
+
+    const buffer = await this.client.downloadFileData(cleanId);
+    if (buffer.length > maxLimit) {
+      throw new MattermostValidationError(
+        `Downloaded file size (${buffer.length} bytes) exceeds maximum allowed limit of ${maxLimit} bytes.`
+      );
+    }
+
+    fs.writeFileSync(finalPath, buffer);
+    return {
+      fileId: cleanId,
+      filename: safeName,
+      mimeType: info.mime_type || 'application/octet-stream',
+      size: buffer.length,
+      savedPath: finalPath,
     };
   }
 }

@@ -626,6 +626,40 @@ program
     }
   });
 
+// file
+program
+  .command('file <fileId>')
+  .description('Download an attachment file by file ID safely')
+  .option('-o, --output <dir>', 'Destination directory (defaults to ./data/downloads)')
+  .option('--max-size <bytes>', 'Maximum allowable file size in bytes (defaults to 50MB)')
+  .action(async (fileId, opts) => {
+    const service = getService();
+    try {
+      const maxSizeBytes = opts.maxSize ? parseInt(opts.maxSize, 10) : undefined;
+      const result = await service.downloadFile({
+        fileId,
+        outputDir: opts.output,
+        maxSizeBytes: isNaN(maxSizeBytes as any) ? undefined : maxSizeBytes,
+      });
+
+      if (program.opts().json) {
+        handleOutput(result, true);
+      } else {
+        console.log('\n📥 File Downloaded Successfully');
+        console.log(`   File ID:    ${result.fileId}`);
+        console.log(`   Filename:   ${result.filename}`);
+        console.log(`   MIME Type:  ${result.mimeType}`);
+        console.log(`   Size:       ${result.size} bytes (${(result.size / 1024).toFixed(1)} KB)`);
+        console.log(`   Saved Path: ${result.savedPath}`);
+        console.log('');
+      }
+    } catch (err) {
+      handleError(err);
+    } finally {
+      await service.close();
+    }
+  });
+
 // channel
 program
   .command('channel')

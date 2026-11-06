@@ -334,6 +334,28 @@ export function createMattermostMcpServer(service?: MattermostAutomationService)
         required: ['usernameOrId'],
       },
     },
+    {
+      name: 'mattermost_get_file',
+      description: 'Download an attachment file from Mattermost by file ID into a local directory safely.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          fileId: {
+            type: 'string',
+            description: 'Mattermost 26-character file ID.',
+          },
+          outputDir: {
+            type: 'string',
+            description: 'Optional local destination directory (defaults to ./data/downloads).',
+          },
+          maxSizeBytes: {
+            type: 'number',
+            description: 'Maximum allowable file size in bytes (defaults to 52428800 / 50MB).',
+          },
+        },
+        required: ['fileId'],
+      },
+    },
   ];
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -815,6 +837,27 @@ export function createMattermostMcpServer(service?: MattermostAutomationService)
           const usernameOrId = typeof args.usernameOrId === 'string' ? args.usernameOrId : '';
 
           const result = await automationService.getUser(usernameOrId);
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(result, null, 2),
+              },
+            ],
+          };
+        }
+
+        case 'mattermost_get_file': {
+          const fileId = typeof args.fileId === 'string' ? args.fileId : '';
+          const outputDir = typeof args.outputDir === 'string' ? args.outputDir : undefined;
+          const maxSizeBytes = typeof args.maxSizeBytes === 'number' ? args.maxSizeBytes : undefined;
+
+          const result = await automationService.downloadFile({
+            fileId,
+            outputDir,
+            maxSizeBytes,
+          });
 
           return {
             content: [

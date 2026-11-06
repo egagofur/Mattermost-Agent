@@ -370,4 +370,22 @@ export class MattermostApiClient {
     const path = isId ? `/api/v4/users/${encodeURIComponent(clean)}` : `/api/v4/users/username/${encodeURIComponent(clean)}`;
     return this.request<MattermostRawUser>(path);
   }
+
+  public async getFileInfo(fileId: string): Promise<any> {
+    return this.request<any>(`/api/v4/files/${encodeURIComponent(fileId)}/info`);
+  }
+
+  public async downloadFileData(fileId: string): Promise<Buffer> {
+    const url = `${this.baseUrl}/api/v4/files/${encodeURIComponent(fileId)}`;
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${this.token}`,
+      },
+    });
+    if (!res.ok) {
+      throw new MattermostNetworkError(`Failed to download file data: HTTP ${res.status}`);
+    }
+    const arrayBuffer = await res.arrayBuffer();
+    return Buffer.from(arrayBuffer);
+  }
 }

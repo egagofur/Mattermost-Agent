@@ -1,6 +1,8 @@
+import * as path from 'path';
 import {
   Channel,
   EditMessageResult,
+  FileDownloadResult,
   MentionsResult,
   Post,
   PostContextResult,
@@ -28,6 +30,7 @@ import {
   ActionResult,
   EditMessageAction,
   GetChannelAction,
+  GetFileAction,
   GetMentionsAction,
   GetPostAction,
   GetThreadAction,
@@ -140,6 +143,9 @@ export class ActionExecutor {
           break;
         case 'get_user':
           resultData = await this.handleGetUser(action);
+          break;
+        case 'get_file':
+          resultData = await this.handleGetFile(action);
           break;
       }
 
@@ -376,6 +382,14 @@ export class ActionExecutor {
       return this.provider.getUser(action.usernameOrId);
     }
     throw new MattermostProviderError('The configured provider does not support retrieving user profiles.');
+  }
+
+  public async handleGetFile(action: GetFileAction): Promise<FileDownloadResult> {
+    if (this.provider.downloadFile) {
+      const outputDir = action.outputDir || path.resolve(process.cwd(), 'data', 'downloads');
+      return this.provider.downloadFile(action.fileId, outputDir, action.maxSizeBytes);
+    }
+    throw new MattermostProviderError('The configured provider does not support downloading attachment files.');
   }
 }
 

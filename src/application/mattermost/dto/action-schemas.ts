@@ -85,6 +85,13 @@ export const GetUserActionSchema = z.object({
   usernameOrId: z.string().min(1, 'Username or user ID is required.'),
 });
 
+export const GetFileActionSchema = z.object({
+  action: z.literal('get_file'),
+  fileId: z.string().min(1, 'File ID is required.'),
+  outputDir: z.string().optional(),
+  maxSizeBytes: z.number().int().positive().optional(),
+});
+
 export const MattermostActionSchema = z.discriminatedUnion('action', [
   SendMessageActionSchema,
   ReplyToMessageActionSchema,
@@ -98,6 +105,7 @@ export const MattermostActionSchema = z.discriminatedUnion('action', [
   UnreadSummaryActionSchema,
   GetPostActionSchema,
   GetUserActionSchema,
+  GetFileActionSchema,
 ]);
 
 export type SendMessageAction = z.infer<typeof SendMessageActionSchema>;
@@ -112,6 +120,7 @@ export type SearchAction = z.infer<typeof SearchActionSchema>;
 export type UnreadSummaryAction = z.infer<typeof UnreadSummaryActionSchema>;
 export type GetPostAction = z.infer<typeof GetPostActionSchema>;
 export type GetUserAction = z.infer<typeof GetUserActionSchema>;
+export type GetFileAction = z.infer<typeof GetFileActionSchema>;
 export type MattermostAction = z.infer<typeof MattermostActionSchema>;
 
 export interface ActionResult<T = unknown> {

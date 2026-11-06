@@ -2,6 +2,7 @@ import { loadConfig, MattermostConfig } from '../../../config/env';
 import {
   Channel,
   EditMessageResult,
+  FileDownloadResult,
   MentionsResult,
   Post,
   PostContextResult,
@@ -319,6 +320,22 @@ export class MattermostAutomationService {
     return this.actionExecutor.handleGetUser({
       action: 'get_user',
       usernameOrId,
+    });
+  }
+
+  /**
+   * Securely downloads an attachment file to a local directory with path-traversal and file-size guardrails.
+   */
+  public async downloadFile(params: {
+    fileId: string;
+    outputDir?: string;
+    maxSizeBytes?: number;
+  }): Promise<FileDownloadResult> {
+    return this.actionExecutor.handleGetFile({
+      action: 'get_file',
+      fileId: params.fileId,
+      outputDir: params.outputDir,
+      maxSizeBytes: params.maxSizeBytes,
     });
   }
 
