@@ -3,6 +3,7 @@ import * as path from 'path';
 import {
   MentionsResult,
   Post,
+  PostContextResult,
   SearchFilterOptions,
   SearchPostsResult,
   ThreadPostItem,
@@ -503,6 +504,79 @@ export class ThreadService {
       total: posts.length,
       query,
       posts,
+    };
+  }
+
+  /**
+   * Retrieves a single post and its surrounding contextual posts (before and after) in the same channel.
+   */
+  public async getPostWithContext(postIdOrPermalink: string, contextCount = 3): Promise<PostContextResult> {
+    const postId = ThreadService.extractPostIdFromPermalink(postIdOrPermalink);
+    if (!postId) {
+      throw new MattermostValidationError(`Invalid post identifier or permalink: '${postIdOrPermalink}'`);
+    }
+
+    this.logger.debug(`Fetching post '${postId}' with context (count: ${contextCount})...`);
+
+    // 1. Fetch target post
+    let targetPost: Post;
+    if (this.provider.getPost) {
+      targetPost = await this.provider.getPost(postId);
+    } else {
+      const thread = await this.provider.getPostThread(postId);
+      if (!thread || !thread.posts || !thread.posts[postId]) {
+        throw new MattermostValidationError(`Post '${postId}' not found.`);
+      }
+      targetPost = thread.posts[postId];
+    }
+
+    if (targetPost.deleteAt && targetPost.deleteAt > 0) {
+      throw new MattermostValidationError(`Post '${postId}' has been deleted.`);
+    }
+
+    // 2. Fetch context posts (before and after in channel)
+    let rawBefore: Post[] = [];
+    let rawAfter: Post[] = [];
+
+    if (contextCount > 0 && this.provider.getChannelPosts) {
+      const [beforeList, afterList] = await Promise.all([
+        this.provider.getChannelPosts(targetPost.channelId, { before: targetPost.id, limit: contextCount }),
+        this.provider.getChannelPosts(targetPost.channelId, { after: targetPost.id, limit: contextCount }),
+      ]);
+      rawBefore = (beforeList || []).filter((p) => (!p.deleteAt || p.deleteAt === 0) && p.id !== targetPost.id);
+      rawAfter = (afterList || []).filter((p) => (!p.deleteAt || p.deleteAt === 0) && p.id !== targetPost.id);
+    }
+
+    // Sort chronologically ascending
+    rawBefore.sort((a, b) => a.createAt - b.createAt);
+    rawAfter.sort((a, b) => a.createAt - b.createAt);
+
+    // 3. Resolve usernames
+    const allUserIds = [
+      targetPost.userId,
+      ...rawBefore.map((p) => p.userId),
+      ...rawAfter.map((p) => p.userId),
+    ];
+    await this.userCache.resolveUsers(allUserIds);
+
+    const mapPostItem = (p: Post): ThreadPostItem => ({
+      id: p.id,
+      rootId: p.rootId || undefined,
+      channelId: p.channelId,
+      userId: p.userId,
+      username: this.userCache.getUsername(p.userId),
+      createAt: p.createAt,
+      updateAt: p.updateAt,
+      message: p.message,
+      files: p.files && p.files.length > 0 ? p.files : undefined,
+      reactions: p.reactions && p.reactions.length > 0 ? p.reactions : undefined,
+    });
+
+    return {
+      post: mapPostItem(targetPost),
+      before: rawBefore.map(mapPostItem),
+      after: rawAfter.map(mapPostItem),
+      totalContextPosts: rawBefore.length + rawAfter.length,
     };
   }
 }

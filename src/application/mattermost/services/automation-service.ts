@@ -4,12 +4,14 @@ import {
   EditMessageResult,
   MentionsResult,
   Post,
+  PostContextResult,
   SearchFilterOptions,
   SearchPostsResult,
   SendMessageResult,
   ThreadViewResult,
   UnreadSummaryResult,
   User,
+  UserProfileResult,
 } from '../../../domain/mattermost/entities';
 import { MattermostProvider } from '../../../domain/mattermost/providers/mattermost-provider.interface';
 import { MattermostApiClient } from '../../../infrastructure/mattermost/api/client';
@@ -297,6 +299,27 @@ export class MattermostAutomationService {
    */
   public async getUnreadSummary(): Promise<UnreadSummaryResult> {
     return this.actionExecutor.handleUnreadSummary();
+  }
+
+  /**
+   * Retrieves a single post and its surrounding contextual posts in the same channel.
+   */
+  public async getPostWithContext(postIdOrPermalink: string, context?: number): Promise<PostContextResult> {
+    return this.actionExecutor.handleGetPost({
+      action: 'get_post',
+      postIdOrPermalink,
+      context: context ?? 3,
+    });
+  }
+
+  /**
+   * Retrieves profile details for a given username or 26-char user ID.
+   */
+  public async getUser(usernameOrId: string): Promise<UserProfileResult> {
+    return this.actionExecutor.handleGetUser({
+      action: 'get_user',
+      usernameOrId,
+    });
   }
 
   /**

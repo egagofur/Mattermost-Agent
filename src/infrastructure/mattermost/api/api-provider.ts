@@ -10,6 +10,7 @@ import {
   SendMessageResult,
   UnreadSummaryResult,
   User,
+  UserProfileResult,
 } from '../../../domain/mattermost/entities';
 import { MattermostProvider } from '../../../domain/mattermost/providers/mattermost-provider.interface';
 import { MattermostApiClient, MattermostRawChannel, MattermostRawPost, MattermostRawUser } from './client';
@@ -259,6 +260,41 @@ export class MattermostApiProvider implements MattermostProvider {
     return {
       totalUnreadChannels: unreads.length,
       channels: unreads,
+    };
+  }
+
+  public async getPost(postId: string): Promise<Post> {
+    const rawPost = await this.client.getPost(postId);
+    return this.mapPost(rawPost);
+  }
+
+  public async getChannelPosts(
+    channelId: string,
+    options: { before?: string; after?: string; limit?: number }
+  ): Promise<Post[]> {
+    const rawList = await this.client.getChannelPostsContext(channelId, {
+      before: options.before,
+      after: options.after,
+      perPage: options.limit,
+    });
+    if (!rawList || !rawList.order || !rawList.posts) {
+      return [];
+    }
+    return rawList.order.map((id) => this.mapPost(rawList.posts[id])).filter(Boolean);
+  }
+
+  public async getUser(usernameOrId: string): Promise<UserProfileResult> {
+    const rawUser = await this.client.getUser(usernameOrId);
+    return {
+      id: rawUser.id,
+      username: rawUser.username,
+      email: rawUser.email,
+      firstName: rawUser.first_name,
+      lastName: rawUser.last_name,
+      nickname: rawUser.nickname,
+      position: rawUser.position,
+      roles: rawUser.roles,
+      createAt: rawUser.create_at,
     };
   }
 }

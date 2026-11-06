@@ -302,6 +302,38 @@ export function createMattermostMcpServer(service?: MattermostAutomationService)
         properties: {},
       },
     },
+    {
+      name: 'mattermost_get_post',
+      description: 'Retrieve a single post along with its surrounding contextual messages (before and after) in the same channel.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          postIdOrPermalink: {
+            type: 'string',
+            description: 'Post 26-character ID or permalink URL.',
+          },
+          context: {
+            type: 'number',
+            description: 'Number of surrounding context posts to retrieve before and after (default: 3).',
+          },
+        },
+        required: ['postIdOrPermalink'],
+      },
+    },
+    {
+      name: 'mattermost_get_user',
+      description: 'Retrieve user profile details (username, full name, email, position, roles) by username or 26-character user ID.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          usernameOrId: {
+            type: 'string',
+            description: 'Mattermost username (with or without @) or 26-character user ID.',
+          },
+        },
+        required: ['usernameOrId'],
+      },
+    },
   ];
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -752,6 +784,37 @@ export function createMattermostMcpServer(service?: MattermostAutomationService)
 
         case 'mattermost_unread_summary': {
           const result = await automationService.getUnreadSummary();
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(result, null, 2),
+              },
+            ],
+          };
+        }
+
+        case 'mattermost_get_post': {
+          const postIdOrPermalink = typeof args.postIdOrPermalink === 'string' ? args.postIdOrPermalink : '';
+          const context = typeof args.context === 'number' ? args.context : undefined;
+
+          const result = await automationService.getPostWithContext(postIdOrPermalink, context);
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(result, null, 2),
+              },
+            ],
+          };
+        }
+
+        case 'mattermost_get_user': {
+          const usernameOrId = typeof args.usernameOrId === 'string' ? args.usernameOrId : '';
+
+          const result = await automationService.getUser(usernameOrId);
 
           return {
             content: [

@@ -10,11 +10,13 @@ import {
   SendMessageResult,
   UnreadSummaryResult,
   User,
+  UserProfileResult,
 } from '../../../domain/mattermost/entities';
 import {
   MattermostAuthenticationError,
   MattermostChannelNotFoundError,
   MattermostProviderError,
+  MattermostValidationError,
 } from '../../../domain/mattermost/errors';
 import { MattermostProvider } from '../../../domain/mattermost/providers/mattermost-provider.interface';
 import { Logger, defaultLogger } from '../services/logger';
@@ -730,6 +732,145 @@ export class MattermostPlaywrightProvider implements MattermostProvider {
         `Failed to retrieve unread summary via browser session: ${err instanceof Error ? err.message : String(err)}`
       );
     }
+  }
+
+  public async getPost(postId: string): Promise<Post> {
+    await this.ensureAuthenticated();
+    const page = await this.webClient.getPage();
+    const rawPost = await page.evaluate(async (targetPostId) => {
+      const res = await fetch(`/api/v4/posts/${encodeURIComponent(targetPostId)}`, {
+        credentials: 'include',
+      });
+      if (res.status === 404) return null;
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+      return res.json();
+    }, postId);
+
+    if (!rawPost) {
+      throw new MattermostValidationError(`Post not found with ID '${postId}'.`);
+    }
+
+    return {
+      id: rawPost.id,
+      createAt: rawPost.create_at,
+      updateAt: rawPost.update_at,
+      deleteAt: rawPost.delete_at,
+      userId: rawPost.user_id,
+      channelId: rawPost.channel_id,
+      rootId: rawPost.root_id,
+      message: rawPost.message,
+      type: rawPost.type,
+      hashtags: rawPost.hashtags,
+      props: rawPost.props,
+      fileIds: rawPost.file_ids,
+      files: rawPost.metadata?.files?.map((f: any) => ({
+        id: f.id,
+        name: f.name,
+        size: f.size,
+        mimeType: f.mime_type,
+        extension: f.extension,
+      })),
+      reactions: rawPost.metadata?.reactions?.map((r: any) => ({
+        userId: r.user_id,
+        postId: r.post_id,
+        emojiName: r.emoji_name,
+        createAt: r.create_at,
+      })),
+    };
+  }
+
+  public async getChannelPosts(
+    channelId: string,
+    options: { before?: string; after?: string; limit?: number }
+  ): Promise<Post[]> {
+    await this.ensureAuthenticated();
+    const page = await this.webClient.getPage();
+
+    const rawList = await page.evaluate(
+      async ({ chanId, before, after, limit }) => {
+        const params = new URLSearchParams();
+        if (limit) params.set('per_page', limit.toString());
+        if (before) params.set('before', before);
+        if (after) params.set('after', after);
+        const res = await fetch(`/api/v4/channels/${encodeURIComponent(chanId)}/posts?${params.toString()}`, {
+          credentials: 'include',
+        });
+        if (!res.ok) return null;
+        return res.json();
+      },
+      { chanId: channelId, before: options.before, after: options.after, limit: options.limit || 30 }
+    );
+
+    if (!rawList || !rawList.order || !rawList.posts) {
+      return [];
+    }
+
+    return rawList.order.map((id: string) => {
+      const p = rawList.posts[id];
+      return {
+        id: p.id,
+        createAt: p.create_at,
+        updateAt: p.update_at,
+        deleteAt: p.delete_at,
+        userId: p.user_id,
+        channelId: p.channel_id,
+        rootId: p.root_id,
+        message: p.message,
+        type: p.type,
+        hashtags: p.hashtags,
+        props: p.props,
+        fileIds: p.file_ids,
+        files: p.metadata?.files?.map((f: any) => ({
+          id: f.id,
+          name: f.name,
+          size: f.size,
+          mimeType: f.mime_type,
+          extension: f.extension,
+        })),
+        reactions: p.metadata?.reactions?.map((r: any) => ({
+          userId: r.user_id,
+          postId: r.post_id,
+          emojiName: r.emoji_name,
+          createAt: r.create_at,
+        })),
+      };
+    });
+  }
+
+  public async getUser(usernameOrId: string): Promise<UserProfileResult> {
+    await this.ensureAuthenticated();
+    const page = await this.webClient.getPage();
+    const clean = usernameOrId.trim().replace(/^@/, '');
+    const isId = /^[a-z0-9]{26}$/i.test(clean);
+
+    const rawUser = await page.evaluate(
+      async ({ target, isUserId }) => {
+        const path = isUserId
+          ? `/api/v4/users/${encodeURIComponent(target)}`
+          : `/api/v4/users/username/${encodeURIComponent(target)}`;
+        const res = await fetch(path, { credentials: 'include' });
+        if (res.status === 404) return null;
+        if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+        return res.json();
+      },
+      { target: clean, isUserId: isId }
+    );
+
+    if (!rawUser) {
+      throw new MattermostValidationError(`User '${usernameOrId}' not found.`);
+    }
+
+    return {
+      id: rawUser.id,
+      username: rawUser.username,
+      email: rawUser.email,
+      firstName: rawUser.first_name,
+      lastName: rawUser.last_name,
+      nickname: rawUser.nickname,
+      position: rawUser.position,
+      roles: rawUser.roles,
+      createAt: rawUser.create_at,
+    };
   }
 
   public async close(): Promise<void> {

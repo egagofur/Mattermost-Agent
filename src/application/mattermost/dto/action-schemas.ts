@@ -74,6 +74,17 @@ export const UnreadSummaryActionSchema = z.object({
   action: z.literal('unread_summary'),
 });
 
+export const GetPostActionSchema = z.object({
+  action: z.literal('get_post'),
+  postIdOrPermalink: z.string().min(1, 'Post permalink or ID is required.'),
+  context: z.number().int().min(0).max(50).optional().default(3),
+});
+
+export const GetUserActionSchema = z.object({
+  action: z.literal('get_user'),
+  usernameOrId: z.string().min(1, 'Username or user ID is required.'),
+});
+
 export const MattermostActionSchema = z.discriminatedUnion('action', [
   SendMessageActionSchema,
   ReplyToMessageActionSchema,
@@ -85,6 +96,8 @@ export const MattermostActionSchema = z.discriminatedUnion('action', [
   GetMentionsActionSchema,
   SearchActionSchema,
   UnreadSummaryActionSchema,
+  GetPostActionSchema,
+  GetUserActionSchema,
 ]);
 
 export type SendMessageAction = z.infer<typeof SendMessageActionSchema>;
@@ -97,6 +110,8 @@ export type GetThreadAction = z.infer<typeof GetThreadActionSchema>;
 export type GetMentionsAction = z.infer<typeof GetMentionsActionSchema>;
 export type SearchAction = z.infer<typeof SearchActionSchema>;
 export type UnreadSummaryAction = z.infer<typeof UnreadSummaryActionSchema>;
+export type GetPostAction = z.infer<typeof GetPostActionSchema>;
+export type GetUserAction = z.infer<typeof GetUserActionSchema>;
 export type MattermostAction = z.infer<typeof MattermostActionSchema>;
 
 export interface ActionResult<T = unknown> {

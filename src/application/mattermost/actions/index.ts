@@ -3,11 +3,13 @@ import {
   EditMessageResult,
   MentionsResult,
   Post,
+  PostContextResult,
   SearchPostsResult,
   SendMessageResult,
   ThreadViewResult,
   UnreadSummaryResult,
   User,
+  UserProfileResult,
 } from '../../../domain/mattermost/entities';
 import {
   MattermostAuthenticationError,
@@ -27,7 +29,9 @@ import {
   EditMessageAction,
   GetChannelAction,
   GetMentionsAction,
+  GetPostAction,
   GetThreadAction,
+  GetUserAction,
   MattermostAction,
   MattermostActionSchema,
   ReadChannelAction,
@@ -130,6 +134,12 @@ export class ActionExecutor {
           break;
         case 'unread_summary':
           resultData = await this.handleUnreadSummary(action);
+          break;
+        case 'get_post':
+          resultData = await this.handleGetPost(action);
+          break;
+        case 'get_user':
+          resultData = await this.handleGetUser(action);
           break;
       }
 
@@ -355,6 +365,17 @@ export class ActionExecutor {
       return this.provider.getUnreadSummary();
     }
     throw new MattermostProviderError('The configured provider does not support retrieving unread summaries.');
+  }
+
+  public async handleGetPost(action: GetPostAction): Promise<PostContextResult> {
+    return this.threadService.getPostWithContext(action.postIdOrPermalink, action.context);
+  }
+
+  public async handleGetUser(action: GetUserAction): Promise<UserProfileResult> {
+    if (this.provider.getUser) {
+      return this.provider.getUser(action.usernameOrId);
+    }
+    throw new MattermostProviderError('The configured provider does not support retrieving user profiles.');
   }
 }
 

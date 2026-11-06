@@ -547,6 +547,85 @@ program
     }
   });
 
+// post
+program
+  .command('post <postIdOrPermalink>')
+  .description('View a single post with surrounding contextual messages in the channel')
+  .option('-c, --context <number>', 'Number of messages before and after to include (default: 3)', '3')
+  .action(async (postIdOrPermalink, opts) => {
+    const service = getService();
+    try {
+      const contextCount = parseInt(opts.context, 10);
+      const result = await service.getPostWithContext(postIdOrPermalink, isNaN(contextCount) ? 3 : contextCount);
+      if (program.opts().json) {
+        handleOutput(result, true);
+      } else {
+        console.log(`\n📌 Post View with Channel Context (${result.totalContextPosts} context posts)\n`);
+        if (result.before.length > 0) {
+          console.log('--- Previous Messages ---');
+          result.before.forEach((p) => {
+            const author = p.username ? `@${p.username}` : p.userId;
+            const time = ThreadService.formatRelativeTime(p.createAt);
+            console.log(`[${time}] ${author}: ${p.message}`);
+          });
+          console.log('');
+        }
+
+        console.log('>>> TARGET POST <<<');
+        const targetAuthor = result.post.username ? `@${result.post.username}` : result.post.userId;
+        const targetTime = ThreadService.formatRelativeTime(result.post.createAt);
+        console.log(`ID:      ${result.post.id}`);
+        console.log(`Author:  ${targetAuthor}`);
+        console.log(`Time:    ${targetTime}`);
+        console.log(`Message:\n${result.post.message}\n`);
+
+        if (result.after.length > 0) {
+          console.log('--- Following Messages ---');
+          result.after.forEach((p) => {
+            const author = p.username ? `@${p.username}` : p.userId;
+            const time = ThreadService.formatRelativeTime(p.createAt);
+            console.log(`[${time}] ${author}: ${p.message}`);
+          });
+          console.log('');
+        }
+      }
+    } catch (err) {
+      handleError(err);
+    } finally {
+      await service.close();
+    }
+  });
+
+// user
+program
+  .command('user <usernameOrId>')
+  .description('Lookup user profile, roles, and position by username or user ID')
+  .action(async (usernameOrId) => {
+    const service = getService();
+    try {
+      const result = await service.getUser(usernameOrId);
+      if (program.opts().json) {
+        handleOutput(result, true);
+      } else {
+        console.log('\n👤 Mattermost User Profile');
+        console.log(`   ID:        ${result.id}`);
+        console.log(`   Username:  @${result.username}`);
+        if (result.firstName || result.lastName) {
+          console.log(`   Name:      ${[result.firstName, result.lastName].filter(Boolean).join(' ')}`);
+        }
+        if (result.nickname) console.log(`   Nickname:  ${result.nickname}`);
+        if (result.position) console.log(`   Position:  ${result.position}`);
+        if (result.email) console.log(`   Email:     ${result.email}`);
+        if (result.roles) console.log(`   Roles:     ${result.roles}`);
+        console.log('');
+      }
+    } catch (err) {
+      handleError(err);
+    } finally {
+      await service.close();
+    }
+  });
+
 // channel
 program
   .command('channel')

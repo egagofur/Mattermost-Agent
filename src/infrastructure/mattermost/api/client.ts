@@ -23,6 +23,7 @@ export interface MattermostRawUser {
   first_name?: string;
   last_name?: string;
   nickname?: string;
+  position?: string;
   roles?: string;
   create_at?: number;
 }
@@ -338,5 +339,35 @@ export class MattermostApiClient {
 
   public async getChannelMembersForTeam(teamId: string): Promise<any[]> {
     return this.request<any[]>(`/api/v4/users/me/teams/${encodeURIComponent(teamId)}/channels/members`);
+  }
+
+  public async getPost(postId: string): Promise<MattermostRawPost> {
+    return this.request<MattermostRawPost>(`/api/v4/posts/${encodeURIComponent(postId)}`);
+  }
+
+  public async getChannelPostsContext(
+    channelId: string,
+    options: { before?: string; after?: string; perPage?: number }
+  ): Promise<MattermostRawPostList> {
+    const params = new URLSearchParams();
+    if (options.perPage) {
+      params.set('per_page', options.perPage.toString());
+    }
+    if (options.before) {
+      params.set('before', options.before);
+    }
+    if (options.after) {
+      params.set('after', options.after);
+    }
+    return this.request<MattermostRawPostList>(
+      `/api/v4/channels/${encodeURIComponent(channelId)}/posts?${params.toString()}`
+    );
+  }
+
+  public async getUser(usernameOrId: string): Promise<MattermostRawUser> {
+    const clean = usernameOrId.trim().replace(/^@/, '');
+    const isId = /^[a-z0-9]{26}$/i.test(clean);
+    const path = isId ? `/api/v4/users/${encodeURIComponent(clean)}` : `/api/v4/users/username/${encodeURIComponent(clean)}`;
+    return this.request<MattermostRawUser>(path);
   }
 }
