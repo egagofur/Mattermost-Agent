@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { CronJobExecutionState } from './cron-config-schema';
+import { resolveAppPath } from '../../../config/paths';
 import { Logger, defaultLogger } from '../services/logger';
 
 export class CronStateManager {
@@ -10,7 +11,7 @@ export class CronStateManager {
 
   constructor(filePath?: string, logger?: Logger) {
     this.logger = logger ?? defaultLogger;
-    this.filePath = filePath || path.resolve(process.cwd(), 'data/cron_state.json');
+    this.filePath = filePath ? resolveAppPath(filePath) : resolveAppPath('data/cron_state.json');
     this.load();
   }
 

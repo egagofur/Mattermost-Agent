@@ -2,11 +2,12 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as dotenv from 'dotenv';
 import { z } from 'zod';
+import { getPackageRoot, resolveAppPath } from './paths';
 
 // Load .env if present (checking cwd, package root, and ~/.mattermost/.env)
 dotenv.config();
 
-const pkgRoot = path.resolve(__dirname, '../../');
+const pkgRoot = getPackageRoot();
 const homeEnv = path.resolve(process.env.HOME || '', '.mattermost/.env');
 
 if (fs.existsSync(path.resolve(pkgRoot, '.env'))) {
@@ -48,7 +49,7 @@ export const ConfigSchema = z
     MATTERMOST_EXPECTED_USERNAME: z.string().optional(),
 
     MATTERMOST_CHANNELS_CONFIG: z.string().optional().transform((cfgPath) => {
-      if (cfgPath) return path.resolve(process.cwd(), cfgPath);
+      if (cfgPath) return resolveAppPath(cfgPath);
       // Check package root channels.yml
       const pkgChannels = path.resolve(pkgRoot, 'channels.yml');
       if (fs.existsSync(pkgChannels)) return pkgChannels;
@@ -61,15 +62,7 @@ export const ConfigSchema = z
       .string()
       .default('./data/mattermost-browser')
       .transform((dir) => {
-        const localDir = path.resolve(process.cwd(), dir);
-        if (fs.existsSync(localDir)) {
-          return localDir;
-        }
-        const pkgProfile = path.resolve(pkgRoot, 'data/mattermost-browser');
-        if (fs.existsSync(pkgProfile)) {
-          return pkgProfile;
-        }
-        return localDir;
+        return resolveAppPath(dir);
       }),
 
     MATTERMOST_HEADLESS: booleanFromString.default(true),

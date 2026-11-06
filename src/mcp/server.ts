@@ -7,7 +7,10 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { MattermostAutomationService } from '../application/mattermost/services/automation-service';
 import { loadConfig } from '../config/env';
-import { ChannelConfigLoader } from '../infrastructure/mattermost/services/channel-config-loader';
+import {
+  ChannelConfigLoader,
+  NormalizedChannelMapping,
+} from '../infrastructure/mattermost/services/channel-config-loader';
 import { ThreadService } from '../infrastructure/mattermost/services/thread-service';
 
 export function createMattermostMcpServer(service?: MattermostAutomationService): Server {
@@ -428,13 +431,16 @@ export function createMattermostMcpServer(service?: MattermostAutomationService)
 
         case 'mattermost_list_channels': {
           const query = typeof args.query === 'string' ? args.query.toLowerCase() : undefined;
-          const configLoader = new ChannelConfigLoader();
+          const configLoader = automationService.getChannelResolver().getConfigLoader();
+
+          // Surface explicit error when 0 channels are configured/found instead of silent empty list
+          configLoader.assertHasChannels();
           const mappings = configLoader.getAllMappings();
 
           let filtered = mappings;
           if (query) {
             filtered = mappings.filter(
-              (m) =>
+              (m: NormalizedChannelMapping) =>
                 m.alias.toLowerCase().includes(query) ||
                 m.channel.toLowerCase().includes(query) ||
                 (m.description && m.description.toLowerCase().includes(query)) ||
@@ -449,7 +455,7 @@ export function createMattermostMcpServer(service?: MattermostAutomationService)
                 text: JSON.stringify(
                   {
                     total: filtered.length,
-                    channels: filtered.map((c) => ({
+                    channels: filtered.map((c: NormalizedChannelMapping) => ({
                       alias: c.alias,
                       channel: c.channel,
                       team: c.team,
@@ -759,6 +765,8 @@ export function createMattermostMcpServer(service?: MattermostAutomationService)
 
         case 'mattermost_list_cron_jobs': {
           const query = typeof args.query === 'string' ? args.query.toLowerCase() : undefined;
+          const cronLoader = automationService.getCronScheduler().getConfigLoader();
+          const warning = cronLoader.getLoadWarning();
           const jobs = automationService.listCronJobs();
 
           let filtered = jobs;
@@ -778,6 +786,7 @@ export function createMattermostMcpServer(service?: MattermostAutomationService)
                 text: JSON.stringify(
                   {
                     total: filtered.length,
+                    warning: warning && filtered.length === 0 ? warning : undefined,
                     jobs: filtered,
                   },
                   null,

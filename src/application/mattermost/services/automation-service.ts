@@ -220,6 +220,13 @@ export class MattermostAutomationService {
   }
 
   /**
+   * Returns the ChannelResolver instance.
+   */
+  public getChannelResolver(): ChannelResolver {
+    return this.channelResolver;
+  }
+
+  /**
    * Reads recent messages from a channel.
    */
   public async readChannel(params: {

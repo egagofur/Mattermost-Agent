@@ -8,6 +8,7 @@ import {
   RawCronJobDefinition,
 } from './cron-config-schema';
 import { MattermostValidationError } from '../../../domain/mattermost/errors';
+import { getPackageRoot, resolveAppPath, resolveConfigFile } from '../../../config/paths';
 import { Logger, defaultLogger } from '../services/logger';
 
 export interface CronConfigLoaderOptions {
@@ -26,8 +27,11 @@ export class CronConfigLoader {
   ];
 
   private configPath?: string;
+  private loadedPath?: string;
   private defaultTimezone: string = 'UTC';
   private jobs: Map<string, NormalizedCronJob> = new Map();
+  private searchedLocations: string[] = [];
+  private loadWarning?: string;
   private logger: Logger;
 
   constructor(options: CronConfigLoaderOptions = {}) {
@@ -39,25 +43,42 @@ export class CronConfigLoader {
   }
 
   private autoLoad(): void {
-    if (this.configPath) {
-      this.loadFromFile(this.configPath);
+    const resolution = resolveConfigFile(
+      CronConfigLoader.DEFAULT_CONFIG_LOCATIONS,
+      this.configPath,
+      'MATTERMOST_CRON_CONFIG'
+    );
+    this.searchedLocations = resolution.searchedLocations;
+
+    if (resolution.resolvedPath) {
+      this.loadFromFile(resolution.resolvedPath);
       return;
     }
 
-    const envPath = process.env.MATTERMOST_CRON_CONFIG;
-    if (envPath && this.loadFromFile(envPath)) {
-      return;
-    }
-
-    for (const loc of CronConfigLoader.DEFAULT_CONFIG_LOCATIONS) {
-      if (this.loadFromFile(loc)) {
-        return;
-      }
-    }
+    this.loadWarning = `cron.yml was not found in searched locations: [${this.searchedLocations.join(', ')}]`;
+    this.logger.warn(this.loadWarning);
   }
 
   public loadFromFile(filePath: string): boolean {
-    const resolved = path.resolve(process.cwd(), filePath);
+    let resolved = filePath;
+    if (!path.isAbsolute(resolved)) {
+      const inCwd = path.resolve(process.cwd(), filePath);
+      if (fs.existsSync(inCwd)) {
+        resolved = inCwd;
+      } else {
+        const inPkg = path.resolve(getPackageRoot(), filePath);
+        if (fs.existsSync(inPkg)) {
+          resolved = inPkg;
+        } else {
+          resolved = inCwd;
+        }
+      }
+    }
+
+    if (!this.searchedLocations.includes(resolved)) {
+      this.searchedLocations.push(resolved);
+    }
+
     if (!fs.existsSync(resolved)) {
       return false;
     }
@@ -66,6 +87,7 @@ export class CronConfigLoader {
       const content = fs.readFileSync(resolved, 'utf-8');
       this.loadFromContent(content);
       this.configPath = resolved;
+      this.loadedPath = resolved;
       return true;
     } catch (err) {
       if (err instanceof MattermostValidationError) {
@@ -152,7 +174,7 @@ export class CronConfigLoader {
     job.enabled = enabled;
     this.jobs.set(name.toLowerCase().trim(), job);
 
-    const targetPath = this.configPath || 'cron.yml';
+    const targetPath = this.loadedPath || this.configPath || resolveAppPath('cron.yml');
     this.saveToFile(targetPath);
     return true;
   }
@@ -162,7 +184,32 @@ export class CronConfigLoader {
   }
 
   public getConfigPath(): string | undefined {
-    return this.configPath;
+    return this.configPath || this.loadedPath;
+  }
+
+  public getLoadedPath(): string | undefined {
+    return this.loadedPath;
+  }
+
+  public getSearchedLocations(): string[] {
+    return [...this.searchedLocations];
+  }
+
+  public getLoadWarning(): string | undefined {
+    return this.loadWarning;
+  }
+
+  public assertHasJobs(contextHint?: string): void {
+    if (this.jobs.size === 0) {
+      const hint = contextHint ? ` (${contextHint})` : '';
+      const searched =
+        this.searchedLocations.length > 0
+          ? ` Searched locations: [${this.searchedLocations.join(', ')}].`
+          : '';
+      throw new MattermostValidationError(
+        `No configured cron jobs found in cron.yml${hint}.${searched}`
+      );
+    }
   }
 
   public toYamlObject(): RawCronConfigFile {
@@ -188,7 +235,9 @@ export class CronConfigLoader {
   }
 
   public saveToFile(filePath?: string): void {
-    const target = path.resolve(process.cwd(), filePath || this.configPath || 'cron.yml');
+    const target = filePath
+      ? resolveAppPath(filePath)
+      : this.loadedPath || this.configPath || resolveAppPath('cron.yml');
     const dir = path.dirname(target);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
@@ -197,6 +246,7 @@ export class CronConfigLoader {
     const doc = new YAML.Document(this.toYamlObject());
     fs.writeFileSync(target, doc.toString(), 'utf-8');
     this.configPath = target;
+    this.loadedPath = target;
     this.logger.debug(`Saved cron configuration to '${target}'`);
   }
 }

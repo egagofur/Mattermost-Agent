@@ -17,6 +17,7 @@ import {
   MattermostValidationError,
 } from '../../../domain/mattermost/errors';
 import { MattermostProvider } from '../../../domain/mattermost/providers/mattermost-provider.interface';
+import { resolveAppPath } from '../../../config/paths';
 import { Logger, defaultLogger } from './logger';
 import { UserCacheService } from './user-cache';
 
@@ -53,7 +54,7 @@ export class ThreadService {
   constructor(provider: MattermostProvider, logger?: Logger, stateDir?: string, userCache?: UserCacheService) {
     this.provider = provider;
     this.logger = logger ?? defaultLogger;
-    const baseDir = stateDir || path.resolve(process.cwd(), 'data');
+    const baseDir = stateDir ? resolveAppPath(stateDir) : resolveAppPath('data');
     this.stateFilePath = path.join(baseDir, 'last_thread.json');
     this.userCache = userCache ?? new UserCacheService(this.provider, this.logger);
   }
